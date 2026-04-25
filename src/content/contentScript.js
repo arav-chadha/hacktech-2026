@@ -4,6 +4,10 @@ import {
     normalizeWhitespace,
 } from "../shared/translationMarkup";
 
+const ALIGNMENT_TOKEN_ATTR = "data-language-extension-alignment-token";
+const TOAST_ID = "language-extension-alignment-toast";
+const STYLE_ID = "language-extension-alignment-style";
+
 const processedNodes = new WeakSet();
 const PROCESSED_ATTR = "data-language-extension-processed";
 const WORD_PATTERN = /\b[\p{L}\p{N}'’-]+\b/gu;
@@ -47,6 +51,7 @@ const EXCLUDED_CONTAINER_SELECTOR = [
 ].join(", ");
 
 let userEmail = null;
+let activeToastTimeout = null;
 
 chrome.storage.local.get("userEmail", (data) => {
   console.log("Fetching email");
@@ -87,6 +92,10 @@ function scoreProcessingRootCandidate(element) {
 
 function getWordMatches(text) {
     return Array.from(text.matchAll(WORD_PATTERN));
+}
+
+function createWordPattern() {
+    return new RegExp(WORD_PATTERN.source, WORD_PATTERN.flags);
 }
 
 function buildStartTag(element) {
@@ -193,6 +202,271 @@ function restoreOriginalParagraphHtml(paragraph, originalHtml) {
     paragraph.innerHTML = originalHtml;
 }
 
+function ensureAlignmentStyles() {
+    if (document.getElementById(STYLE_ID)) {
+        return;
+    }
+
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+        [${ALIGNMENT_TOKEN_ATTR}] {
+            cursor: pointer;
+            text-decoration: underline;
+            text-decoration-style: dotted;
+            text-underline-offset: 0.12em;
+        }
+
+        [${ALIGNMENT_TOKEN_ATTR}].language-extension-alignment-active {
+            background: rgba(255, 225, 130, 0.45);
+            border-radius: 0.2em;
+        }
+
+        #${TOAST_ID} {
+            position: fixed;
+            z-index: 2147483647;
+            max-width: min(320px, calc(100vw - 24px));
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(28, 32, 39, 0.96);
+            color: #f6f7fb;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+            font: 13px/1.4 system-ui, sans-serif;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(6px);
+            transition: opacity 140ms ease, transform 140ms ease;
+        }
+
+        #${TOAST_ID}.language-extension-toast-visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        #${TOAST_ID} .language-extension-toast-label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 11px;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            color: rgba(246, 247, 251, 0.72);
+        }
+    `;
+    document.documentElement.appendChild(style);
+}
+
+function clearActiveAlignmentTokens(root = document) {
+    root.querySelectorAll(".language-extension-alignment-active").forEach((element) => {
+        element.classList.remove("language-extension-alignment-active");
+    });
+}
+
+function getOrCreateAlignmentToast() {
+    let toast = document.getElementById(TOAST_ID);
+    if (toast) {
+        return toast;
+    }
+
+    toast = document.createElement("div");
+    toast.id = TOAST_ID;
+    document.body.appendChild(toast);
+    return toast;
+}
+
+function hideAlignmentToast() {
+    const toast = document.getElementById(TOAST_ID);
+    if (!toast) {
+        return;
+    }
+
+    toast.classList.remove("language-extension-toast-visible");
+    if (activeToastTimeout) {
+        window.clearTimeout(activeToastTimeout);
+        activeToastTimeout = null;
+    }
+}
+
+function showAlignmentToast(targetElement, sourceText) {
+    ensureAlignmentStyles();
+    const toast = getOrCreateAlignmentToast();
+    const rect = targetElement.getBoundingClientRect();
+
+    toast.innerHTML = "";
+    const label = document.createElement("span");
+    label.className = "language-extension-toast-label";
+    label.textContent = "Original";
+    const body = document.createElement("div");
+    body.textContent = sourceText;
+    toast.append(label, body);
+
+    const margin = 12;
+    const top = Math.min(window.innerHeight - margin, rect.bottom + 10);
+    const left = Math.min(window.innerWidth - margin, Math.max(margin, rect.left));
+
+    toast.style.top = `${top}px`;
+    toast.style.left = `${left}px`;
+    toast.classList.add("language-extension-toast-visible");
+
+    if (activeToastTimeout) {
+        window.clearTimeout(activeToastTimeout);
+        activeToastTimeout = null;
+    }
+}
+
+function applyAlignmentMarkup(paragraph, alignments) {
+    if (!Array.isArray(alignments) || alignments.length === 0) {
+        return;
+    }
+
+    const tokenAlignments = new Map();
+    for (const alignment of alignments) {
+        if (
+            !alignment ||
+            typeof alignment.id !== "string" ||
+            typeof alignment.sourceText !== "string" ||
+            typeof alignment.targetText !== "string"
+        ) {
+            continue;
+        }
+
+        for (let tokenIndex = alignment.targetStart; tokenIndex <= alignment.targetEnd; tokenIndex += 1) {
+            tokenAlignments.set(tokenIndex, alignment);
+        }
+    }
+
+    if (tokenAlignments.size === 0) {
+        return;
+    }
+
+    const walker = document.createTreeWalker(
+        paragraph,
+        NodeFilter.SHOW_TEXT,
+        {
+            acceptNode(node) {
+                if (!node.nodeValue || getWordMatches(node.nodeValue).length === 0) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+
+                if (node.parentElement?.hasAttribute(ALIGNMENT_TOKEN_ATTR)) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        }
+    );
+
+    const textNodes = [];
+    let currentNode = walker.nextNode();
+    while (currentNode) {
+        textNodes.push(currentNode);
+        currentNode = walker.nextNode();
+    }
+
+    let globalTokenIndex = 0;
+    for (const node of textNodes) {
+        const text = node.nodeValue || "";
+        const matches = Array.from(text.matchAll(createWordPattern()));
+        if (matches.length === 0) {
+            continue;
+        }
+
+        const fragment = document.createDocumentFragment();
+        let cursor = 0;
+
+        for (const match of matches) {
+            const matchStart = match.index ?? 0;
+            const matchText = match[0];
+            const matchEnd = matchStart + matchText.length;
+            const alignment = tokenAlignments.get(globalTokenIndex);
+
+            if (matchStart > cursor) {
+                fragment.append(text.slice(cursor, matchStart));
+            }
+
+            if (alignment) {
+                const span = document.createElement("span");
+                span.setAttribute(ALIGNMENT_TOKEN_ATTR, alignment.id);
+                span.dataset.alignmentId = alignment.id;
+                span.dataset.sourceText = alignment.sourceText;
+                span.dataset.targetText = alignment.targetText;
+                span.textContent = matchText;
+                fragment.append(span);
+            } else {
+                fragment.append(matchText);
+            }
+
+            cursor = matchEnd;
+            globalTokenIndex += 1;
+        }
+
+        if (cursor < text.length) {
+            fragment.append(text.slice(cursor));
+        }
+
+        node.parentNode?.replaceChild(fragment, node);
+    }
+}
+
+function installAlignmentInteractions() {
+    ensureAlignmentStyles();
+
+    document.addEventListener("mouseover", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        const alignedToken = target.closest(`[${ALIGNMENT_TOKEN_ATTR}]`);
+        if (!(alignedToken instanceof HTMLElement)) {
+            return;
+        }
+
+        const alignmentId = alignedToken.dataset.alignmentId;
+        const sourceText = alignedToken.dataset.sourceText;
+        if (!alignmentId || !sourceText) {
+            return;
+        }
+
+        const paragraph = alignedToken.closest("p");
+        if (paragraph instanceof HTMLElement) {
+            clearActiveAlignmentTokens(paragraph);
+            paragraph
+                .querySelectorAll(`[${ALIGNMENT_TOKEN_ATTR}="${alignmentId}"]`)
+                .forEach((element) => {
+                    element.classList.add("language-extension-alignment-active");
+                });
+        }
+
+        showAlignmentToast(alignedToken, sourceText);
+    });
+
+    document.addEventListener("mouseout", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        const alignedToken = target.closest(`[${ALIGNMENT_TOKEN_ATTR}]`);
+        if (!(alignedToken instanceof HTMLElement)) {
+            return;
+        }
+
+        const relatedTarget = event.relatedTarget;
+        if (relatedTarget instanceof Element && alignedToken.contains(relatedTarget)) {
+            return;
+        }
+
+        const paragraph = alignedToken.closest("p");
+        if (paragraph instanceof HTMLElement) {
+            clearActiveAlignmentTokens(paragraph);
+        } else {
+            clearActiveAlignmentTokens();
+        }
+        hideAlignmentToast();
+    });
+}
+
 function getParagraphSelection(node) {
     if (!isValidParagraphNode(node)) return;
     if (processedNodes.has(node)) return;
@@ -262,11 +536,12 @@ async function translateSelection(selection, settings) {
                 return;
             }
 
-            if (!hasRenderedChunk) {
-                // clearParagraphForStreaming(selection.node);
-            }
             hasRenderedChunk = true;
             injectTranslatedHtml(selection.node, translatedHtml);
+
+            if (message.type === "done") {
+                applyAlignmentMarkup(selection.node, message?.translation?.alignments);
+            }
 
             if (message.type === "done") {
                 finish();
@@ -382,6 +657,7 @@ async function loadSettings() {
 
 async function init() {
     const settings = await loadSettings();
+    installAlignmentInteractions();
     const processingRoot = getProcessingRoot();
     await walkAndProcess(processingRoot, settings);
     observeDOM(processingRoot, settings);

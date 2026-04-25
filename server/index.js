@@ -15,6 +15,7 @@ const genAIClient = new GoogleGenerativeAI(LOCAL_GEMMA_API_KEY);
 const SERVER_HOST = "127.0.0.1";
 const MAX_TRANSLATION_ATTEMPTS = 3;
 const FALLBACK_RETRY_DELAY_MS = 60_000;
+const ALIGNMENT_WORD_PATTERN = /\b[\p{L}\p{N}'’-]+\b/gu;
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -52,10 +53,40 @@ function buildTranslationPrompt(targetLanguage) {
   ].join("\n");
 }
 
+function buildAlignmentPrompt(targetLanguage) {
+  return [
+    `You align source-language tokens with translated ${targetLanguage} tokens.`,
+    "Return strict JSON only.",
+    "Return an object with an `alignments` array.",
+    "Each item must have integer fields: sourceStart, sourceEnd, targetStart, targetEnd.",
+    "Indices are inclusive and refer to the provided token arrays.",
+    "Use contiguous source spans and contiguous target spans.",
+    "Allow many-to-one, one-to-many, and many-to-many phrase mappings.",
+    "Only include spans for words or phrases that were actually translated.",
+    "Do not include unchanged spans.",
+    "Do not let target spans overlap each other.",
+    "Favor the smallest accurate aligned phrase span.",
+  ].join("\n");
+}
+
 function extractGemmaText(responseJson) {
   return responseJson?.candidates?.[0]?.content?.parts
     ?.map((part) => String(part?.text ?? ""))
     .join("") ?? "";
+}
+
+function tokenizeWords(text) {
+  const tokenPattern = new RegExp(ALIGNMENT_WORD_PATTERN.source, ALIGNMENT_WORD_PATTERN.flags);
+  return Array.from(String(text ?? "").matchAll(tokenPattern)).map((match, index) => ({
+    index,
+    text: match[0],
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + match[0].length,
+  }));
+}
+
+function joinTokenText(tokens, start, end) {
+  return tokens.slice(start, end + 1).map((token) => token.text).join(" ");
 }
 
 class RetryableTranslationError extends Error {
@@ -115,6 +146,61 @@ function toRetryableTranslationError(error) {
   return new RetryableTranslationError(error.message, retryDelayMs);
 }
 
+function parseJsonResponse(text) {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Model returned invalid JSON: ${error.message}`);
+  }
+}
+
+function normalizeAlignmentEntry(entry, index, sourceTokens, targetTokens, usedTargetIndexes) {
+  const sourceStart = Number(entry?.sourceStart);
+  const sourceEnd = Number(entry?.sourceEnd);
+  const targetStart = Number(entry?.targetStart);
+  const targetEnd = Number(entry?.targetEnd);
+
+  if (
+    !Number.isInteger(sourceStart) ||
+    !Number.isInteger(sourceEnd) ||
+    !Number.isInteger(targetStart) ||
+    !Number.isInteger(targetEnd)
+  ) {
+    return null;
+  }
+
+  if (
+    sourceStart < 0 ||
+    sourceEnd < sourceStart ||
+    sourceEnd >= sourceTokens.length ||
+    targetStart < 0 ||
+    targetEnd < targetStart ||
+    targetEnd >= targetTokens.length
+  ) {
+    return null;
+  }
+
+  for (let tokenIndex = targetStart; tokenIndex <= targetEnd; tokenIndex += 1) {
+    if (usedTargetIndexes.has(tokenIndex)) {
+      return null;
+    }
+  }
+
+  for (let tokenIndex = targetStart; tokenIndex <= targetEnd; tokenIndex += 1) {
+    usedTargetIndexes.add(tokenIndex);
+  }
+
+  return {
+    id: `alignment-${index + 1}`,
+    sourceStart,
+    sourceEnd,
+    targetStart,
+    targetEnd,
+    sourceText: joinTokenText(sourceTokens, sourceStart, sourceEnd),
+    targetText: joinTokenText(targetTokens, targetStart, targetEnd),
+  };
+}
+
 async function readJsonBody(request) {
   const chunks = [];
 
@@ -126,12 +212,119 @@ async function readJsonBody(request) {
   return rawBody ? JSON.parse(rawBody) : {};
 }
 
+async function requestGemmaJson(prompt, payload) {
+  logServerEvent("gemini-json-request-start", {
+    model: GEMMA_MODEL,
+    promptLength: prompt.length,
+    payloadLength: payload.length,
+  });
+
+  const model = genAIClient.getGenerativeModel(
+    {
+      model: GEMMA_MODEL,
+      systemInstruction: prompt,
+    }
+  );
+  const generationConfig = {
+    temperature: 0,
+    responseMimeType: "application/json",
+  };
+
+  const response = await model.generateContent({
+    contents: [{ role: "user", parts: [{ text: payload }] }],
+    generationConfig,
+  });
+
+  const responseText = response.response.text();
+  logServerEvent("gemini-json-request-success", {
+    model: GEMMA_MODEL,
+    responseLength: responseText.length,
+  });
+  return responseText;
+}
+
+async function requestGemmaJsonWithRetries(prompt, payload) {
+  let attempt = 0;
+
+  while (attempt < MAX_TRANSLATION_ATTEMPTS) {
+    attempt += 1;
+
+    try {
+      return await requestGemmaJson(prompt, payload);
+    } catch (error) {
+      const retryableError = toRetryableTranslationError(error);
+      const canRetry = retryableError && attempt < MAX_TRANSLATION_ATTEMPTS;
+
+      logServerEvent("gemini-json-request-error", {
+        attempt,
+        canRetry: Boolean(canRetry),
+        retryDelayMs: retryableError?.retryDelayMs ?? null,
+        errorName: error?.name ?? null,
+        errorMessage: error?.message ?? String(error),
+        errorStatus: error?.status ?? null,
+      });
+
+      if (!canRetry) {
+        throw retryableError ?? error;
+      }
+
+      await delay(retryableError.retryDelayMs);
+    }
+  }
+
+  throw new Error("Alignment request failed.");
+}
+
 function buildTranslationFromParsed(parsedTranslation, segments) {
   return {
     html: reconstructHtmlFromParsedMarkers(parsedTranslation.tree, segments),
     text: buildPlainTextFromParsedMarkers(parsedTranslation.tree),
     markerizedText: parsedTranslation.normalizedText,
+    alignments: [],
   };
+}
+
+async function buildTranslationAlignments({ sourceText, translatedText, targetLanguage }) {
+  const sourceTokens = tokenizeWords(sourceText);
+  const targetTokens = tokenizeWords(translatedText);
+
+  if (sourceTokens.length === 0 || targetTokens.length === 0) {
+    return [];
+  }
+
+  const prompt = buildAlignmentPrompt(targetLanguage);
+  const payload = JSON.stringify({
+    sourceText,
+    translatedText,
+    sourceTokens: sourceTokens.map((token) => token.text),
+    targetTokens: targetTokens.map((token) => token.text),
+  });
+
+  logServerEvent("alignment-start", {
+    targetLanguage,
+    sourceTokenCount: sourceTokens.length,
+    targetTokenCount: targetTokens.length,
+  });
+
+  const responseText = await requestGemmaJsonWithRetries(prompt, payload);
+  const responseJson = parseJsonResponse(responseText);
+  const rawAlignments = Array.isArray(responseJson?.alignments) ? responseJson.alignments : [];
+  const usedTargetIndexes = new Set();
+
+  const normalizedAlignments = rawAlignments
+    .map((entry, index) =>
+      normalizeAlignmentEntry(entry, index, sourceTokens, targetTokens, usedTargetIndexes)
+    )
+    .filter(Boolean);
+
+  logServerEvent("alignment-success", {
+    targetLanguage,
+    sourceTokenCount: sourceTokens.length,
+    targetTokenCount: targetTokens.length,
+    alignmentCount: normalizedAlignments.length,
+  });
+
+  return normalizedAlignments;
 }
 
 function writeStreamEvent(response, payload) {
@@ -381,6 +574,21 @@ const server = http.createServer(async (request, response) => {
         });
       },
     });
+
+    try {
+      translation.alignments = await buildTranslationAlignments({
+        sourceText,
+        translatedText: translation.text,
+        targetLanguage,
+      });
+    } catch (alignmentError) {
+      translation.alignments = [];
+      logServerEvent("alignment-error", {
+        targetLanguage,
+        errorName: alignmentError?.name ?? null,
+        errorMessage: alignmentError?.message ?? String(alignmentError),
+      });
+    }
 
     writeStreamEvent(response, {
       type: "done",
