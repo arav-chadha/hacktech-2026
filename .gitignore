@@ -26,4 +26,4 @@ dist-ssr
 # Config files
 .webextrc
 .webextrc.*
-server/local.config.js
+server/local-config.js
