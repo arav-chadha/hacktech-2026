@@ -6,9 +6,11 @@ const GEMMA_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/
 const SERVER_HOST = "127.0.0.1";
 const MAX_TRANSLATION_ATTEMPTS = 3;
 const FALLBACK_RETRY_DELAY_MS = 60_000;
-const INTER_REQUEST_DELAY_MS = 2_500;
-const TRANSLATION_DELIMITER = "\n<|LANG_EXT_TR|>\n";
-let translationQueue = Promise.resolve();
+const INTER_REQUEST_DELAY_MS = 0;
+const TRANSLATION_DELIMITER = "<|LANG_EXT_TR|>";
+const MAX_CONCURRENT_TRANSLATIONS = 2;
+let activeTranslationCount = 0;
+const pendingTranslationTasks = [];
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -22,22 +24,22 @@ function sendJson(response, statusCode, payload) {
 
 function buildTranslationPrompt(phrases, targetLanguage) {
   return [
-    `Translate each input phrase into ${targetLanguage}`,
-    "Preserve meaning and punctuation",
-    `Return only translated strings in same order as input, separated by delimiter: ${TRANSLATION_DELIMITER.trim()}`,
-    "Do not number outputs",
-    "Do not wrap response in markdown or code fences",
-    `Input phrases: ${JSON.stringify(phrases)}`,
+    `Translate phrases into ${targetLanguage}`,
+    "Preserve meaning & punctuation",
+    `Return only translations same order separated with ${TRANSLATION_DELIMITER}`,
+    "Do not number",
+    "Do not wrap in markdown or code fences",
+    `Phrases: ${JSON.stringify(phrases)}`,
   ].join("\n");
 }
 
 function buildSingleTranslationPrompt(phrase, targetLanguage) {
   return [
-    `Translate this phrase into ${targetLanguage}`,
-    "Preserve meaning and punctuation",
+    `Translate phrase into ${targetLanguage}`,
+    "Preserve meaning & punctuation",
     "Return only translation",
-    "Do not wrap response in markdown or code fences",
-    `Input phrase: ${JSON.stringify(phrase)}`,
+    "Do not wrap in markdown or code fences",
+    `Phrase: ${JSON.stringify(phrase)}`,
   ].join("\n");
 }
 
@@ -120,6 +122,19 @@ async function readJsonBody(request) {
 
   const rawBody = Buffer.concat(chunks).toString("utf8");
   return rawBody ? JSON.parse(rawBody) : {};
+}
+
+function logDebugMessage(payload) {
+  const source = String(payload?.source ?? "unknown");
+  const message = String(payload?.message ?? "");
+  const data = payload?.data;
+
+  if (data && Object.keys(data).length > 0) {
+    console.log(`[Extension debug][${source}] ${message}`, data);
+    return;
+  }
+
+  console.log(`[Extension debug][${source}] ${message}`);
 }
 
 async function translatePhrases({ phrases, targetLanguage }) {
@@ -226,16 +241,34 @@ async function translatePhrases({ phrases, targetLanguage }) {
 }
 
 function enqueueTranslation(task) {
-  const queuedTask = translationQueue
-    .catch(() => undefined)
-    .then(async () => {
-      const result = await task();
-      await delay(INTER_REQUEST_DELAY_MS);
-      return result;
-    });
+  return new Promise((resolve, reject) => {
+    pendingTranslationTasks.push({ task, resolve, reject });
+    scheduleQueuedTranslations();
+  });
+}
 
-  translationQueue = queuedTask.catch(() => undefined);
-  return queuedTask;
+function scheduleQueuedTranslations() {
+  while (
+    activeTranslationCount < MAX_CONCURRENT_TRANSLATIONS &&
+    pendingTranslationTasks.length > 0
+  ) {
+    const queuedTask = pendingTranslationTasks.shift();
+    activeTranslationCount += 1;
+
+    Promise.resolve()
+      .then(() => queuedTask.task())
+      .then(async (result) => {
+        await delay(INTER_REQUEST_DELAY_MS);
+        queuedTask.resolve(result);
+      })
+      .catch((error) => {
+        queuedTask.reject(error);
+      })
+      .finally(() => {
+        activeTranslationCount -= 1;
+        scheduleQueuedTranslations();
+      });
+  }
 }
 
 const server = http.createServer(async (request, response) => {
@@ -256,6 +289,17 @@ const server = http.createServer(async (request, response) => {
 
   if (request.url === "/health" && request.method === "GET") {
     sendJson(response, 200, { ok: true });
+    return;
+  }
+
+  if (request.url === "/debug-log" && request.method === "POST") {
+    try {
+      const body = await readJsonBody(request);
+      logDebugMessage(body);
+      sendJson(response, 200, { ok: true });
+    } catch (error) {
+      sendJson(response, 400, { error: "Invalid debug log payload." });
+    }
     return;
   }
 

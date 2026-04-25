@@ -2,6 +2,7 @@ export const LANGUAGE_STORAGE_KEY = "selectedLanguage";
 export const PHRASE_MIN_STORAGE_KEY = "phraseMinWords";
 export const PHRASE_MAX_STORAGE_KEY = "phraseMaxWords";
 export const PHRASE_TEMPERATURE_STORAGE_KEY = "phraseLengthTemperature";
+export const BATCH_CONCURRENCY_STORAGE_KEY = "batchRequestConcurrency";
 export const GEMMA_MODEL = "gemma-3-27b-it";
 
 export const DEFAULT_SETTINGS = {
@@ -9,6 +10,7 @@ export const DEFAULT_SETTINGS = {
   [PHRASE_MIN_STORAGE_KEY]: 1,
   [PHRASE_MAX_STORAGE_KEY]: 4,
   [PHRASE_TEMPERATURE_STORAGE_KEY]: 0.5,
+  [BATCH_CONCURRENCY_STORAGE_KEY]: 2,
 };
 
 export function clampNumber(value, min, max) {
@@ -34,6 +36,14 @@ export function normalizeSettings(storedValues = {}) {
     0,
     1
   );
+  const batchConcurrency = clampNumber(
+    Number(
+      storedValues[BATCH_CONCURRENCY_STORAGE_KEY] ??
+        DEFAULT_SETTINGS[BATCH_CONCURRENCY_STORAGE_KEY]
+    ),
+    1,
+    2
+  );
 
   return {
     [LANGUAGE_STORAGE_KEY]:
@@ -41,5 +51,6 @@ export function normalizeSettings(storedValues = {}) {
     [PHRASE_MIN_STORAGE_KEY]: Math.min(minWords, maxWords),
     [PHRASE_MAX_STORAGE_KEY]: Math.max(minWords, maxWords),
     [PHRASE_TEMPERATURE_STORAGE_KEY]: temperature,
+    [BATCH_CONCURRENCY_STORAGE_KEY]: batchConcurrency,
   };
 }

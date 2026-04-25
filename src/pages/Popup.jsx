@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import browser from "webextension-polyfill";
 import "./Popup.css";
 import {
+  BATCH_CONCURRENCY_STORAGE_KEY,
   DEFAULT_SETTINGS,
   LANGUAGE_STORAGE_KEY,
   PHRASE_MAX_STORAGE_KEY,
@@ -18,6 +19,9 @@ export default function Popup() {
     [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
       DEFAULT_SETTINGS[PHRASE_TEMPERATURE_STORAGE_KEY]
     ),
+    [BATCH_CONCURRENCY_STORAGE_KEY]: String(
+      DEFAULT_SETTINGS[BATCH_CONCURRENCY_STORAGE_KEY]
+    ),
   });
   const [status, setStatus] = useState("Loading settings...");
   const [isSaving, setIsSaving] = useState(false);
@@ -33,6 +37,9 @@ export default function Popup() {
           [PHRASE_MAX_STORAGE_KEY]: String(normalizedSettings[PHRASE_MAX_STORAGE_KEY]),
           [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
             normalizedSettings[PHRASE_TEMPERATURE_STORAGE_KEY]
+          ),
+          [BATCH_CONCURRENCY_STORAGE_KEY]: String(
+            normalizedSettings[BATCH_CONCURRENCY_STORAGE_KEY]
           ),
         });
         setStatus("Edit settings, then save to reload translation.");
@@ -63,6 +70,7 @@ export default function Popup() {
         [PHRASE_MIN_STORAGE_KEY]: settings[PHRASE_MIN_STORAGE_KEY],
         [PHRASE_MAX_STORAGE_KEY]: settings[PHRASE_MAX_STORAGE_KEY],
         [PHRASE_TEMPERATURE_STORAGE_KEY]: settings[PHRASE_TEMPERATURE_STORAGE_KEY],
+        [BATCH_CONCURRENCY_STORAGE_KEY]: settings[BATCH_CONCURRENCY_STORAGE_KEY],
       });
 
       await browser.storage.local.set(normalizedSettings);
@@ -72,6 +80,9 @@ export default function Popup() {
         [PHRASE_MAX_STORAGE_KEY]: String(normalizedSettings[PHRASE_MAX_STORAGE_KEY]),
         [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
           normalizedSettings[PHRASE_TEMPERATURE_STORAGE_KEY]
+        ),
+        [BATCH_CONCURRENCY_STORAGE_KEY]: String(
+          normalizedSettings[BATCH_CONCURRENCY_STORAGE_KEY]
         ),
       });
       setStatus("Saved. Reloading the current page...");
@@ -155,6 +166,19 @@ export default function Popup() {
           onChange={handleFieldChange}
         />
         <small>0 favors shorter phrases. 1 favors longer phrases.</small>
+      </label>
+
+      <label className="popup__field" htmlFor="batch-concurrency">
+        <span>Parallel Requests</span>
+        <select
+          id="batch-concurrency"
+          name={BATCH_CONCURRENCY_STORAGE_KEY}
+          value={settings[BATCH_CONCURRENCY_STORAGE_KEY]}
+          onChange={handleFieldChange}
+        >
+          <option value="1">1</option>
+          <option value="2">2</option>
+        </select>
       </label>
 
       <button className="popup__button" type="submit" disabled={isSaving}>

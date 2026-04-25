@@ -1,10 +1,13 @@
 import browser from "webextension-polyfill";
 import { DEFAULT_SETTINGS, normalizeSettings } from "../shared/settings";
 
-const processedNodes = new WeakSet();
 const PROCESSED_ATTR = "data-language-extension-processed";
 const WORD_PATTERN = /\b[\p{L}\p{N}'’-]+\b/gu;
 const TRANSLATION_BATCH_SIZE = 8;
+let currentSettings = null;
+let processingRootElement = null;
+let isProcessing = false;
+let processingRequested = false;
 const MAIN_CONTENT_SELECTOR = [
     "main",
     "[role='main']",
@@ -59,6 +62,17 @@ function scoreProcessingRootCandidate(element) {
     return text.length + (paragraphs * 200) - (links * 40) - (controls * 150);
 }
 
+function describeElement(element) {
+    if (!element || !(element instanceof Element)) return "<none>";
+
+    const idPart = element.id ? `#${element.id}` : "";
+    const classPart = element.classList.length > 0
+        ? `.${Array.from(element.classList).slice(0, 3).join(".")}`
+        : "";
+
+    return `${element.tagName.toLowerCase()}${idPart}${classPart}`;
+}
+
 function isValidTextNode(node) {
     if (!node || node.nodeType !== Node.TEXT_NODE) return false;
     if (!node.nodeValue.trim()) return false;
@@ -70,7 +84,7 @@ function isValidTextNode(node) {
     const tag = parent.tagName.toLowerCase();
     if (["script", "style", "noscript", "textarea"].includes(tag)) return false;
 
-    if (getWordMatches(node.nodeValue).length < 3) return false;
+    if (getWordMatches(node.nodeValue).length === 0) return false;
 
     return true;
 }
@@ -107,48 +121,38 @@ function choosePhraseLength(minWords, maxWords, temperature) {
 }
 
 function createReplacementNode(text, phraseStart, phraseEnd, replacementText) {
-    const wrapper = document.createElement("span");
-    wrapper.setAttribute(PROCESSED_ATTR, "true");
+    const fragment = document.createDocumentFragment();
 
     const prefix = text.slice(0, phraseStart);
     const suffix = text.slice(phraseEnd);
 
     if (prefix) {
-        wrapper.appendChild(document.createTextNode(prefix));
+        fragment.appendChild(document.createTextNode(prefix));
     }
 
     const highlightedPhrase = document.createElement("span");
     highlightedPhrase.textContent = replacementText;
     highlightedPhrase.style.setProperty("color", "red", "important");
     highlightedPhrase.setAttribute(PROCESSED_ATTR, "true");
-    wrapper.appendChild(highlightedPhrase);
+    fragment.appendChild(highlightedPhrase);
 
     if (suffix) {
-        wrapper.appendChild(document.createTextNode(suffix));
+        fragment.appendChild(document.createTextNode(suffix));
     }
 
-    return wrapper;
+    return fragment;
 }
 
-function getPhraseSelection(node, settings) {
-    if (!isValidTextNode(node)) return;
-    if (processedNodes.has(node)) return;
-
-    processedNodes.add(node);
-
+function buildPhraseSelection(node, settings) {
     const text = node.nodeValue;
     const wordMatches = getWordMatches(text);
     if (wordMatches.length === 0) return;
 
     const minWords = Math.max(1, Math.min(settings.phraseMinWords, wordMatches.length));
     const maxWords = Math.max(minWords, Math.min(settings.phraseMaxWords, wordMatches.length));
-    const phraseLength = choosePhraseLength(
-        minWords,
-        maxWords,
-        settings.phraseLengthTemperature
-    );
+    const phraseLength = choosePhraseLength(minWords, maxWords, settings.phraseLengthTemperature);
     const maxStartIndex = wordMatches.length - phraseLength;
-    const startIndex = Math.floor(Math.random() * (maxStartIndex + 1));
+    const startIndex = 0;
     const phraseStart = wordMatches[startIndex].index;
     const lastWord = wordMatches[startIndex + phraseLength - 1];
     const phraseEnd = lastWord.index + lastWord[0].length;
@@ -162,76 +166,155 @@ function getPhraseSelection(node, settings) {
     };
 }
 
-async function translateSelections(selections, settings) {
-    if (selections.length === 0) return;
+function collectEligibleSelections(root, settings) {
+    const selections = [];
+    if (!root) return selections;
 
+    const selectionRoot = root.nodeType === Node.TEXT_NODE ? root.parentElement : root;
+    if (!(selectionRoot instanceof Node)) return selections;
+
+    const walker = document.createTreeWalker(selectionRoot, NodeFilter.SHOW_TEXT);
+    let currentNode;
+    let textNodeCount = 0;
+
+    while ((currentNode = walker.nextNode())) {
+        textNodeCount += 1;
+        if (!isValidTextNode(currentNode)) continue;
+
+        const selection = buildPhraseSelection(currentNode, settings);
+        if (!selection) continue;
+        selections.push(selection);
+    }
+
+    return selections;
+}
+
+function createSelectionBatches(selections) {
+    const batches = [];
     for (let offset = 0; offset < selections.length; offset += TRANSLATION_BATCH_SIZE) {
-        const batch = selections.slice(offset, offset + TRANSLATION_BATCH_SIZE);
+        batches.push(selections.slice(offset, offset + TRANSLATION_BATCH_SIZE));
+    }
+    return batches;
+}
 
-        let translatedPhrases;
-        try {
-            translatedPhrases = await browser.runtime.sendMessage({
-                type: "TRANSLATE_PHRASES",
-                payload: {
-                    phrases: batch.map((selection) => selection.phrase),
-                    targetLanguage: settings.selectedLanguage,
-                },
-            });
-        } catch (error) {
-            console.error("Failed to translate phrases:", error);
-            continue;
-        }
+async function requestTranslations(batch, settings) {
+    let translatedPhrases;
+    try {
+        translatedPhrases = await browser.runtime.sendMessage({
+            type: "TRANSLATE_PHRASES",
+            payload: {
+                phrases: batch.map((selection) => selection.phrase),
+                targetLanguage: settings.selectedLanguage,
+            },
+        });
+    } catch (error) {
+        console.error("Failed to translate phrases:", error);
+        return null;
+    }
 
-        if (translatedPhrases?.error) {
-            console.error("Gemma translation error:", translatedPhrases.error);
-            continue;
-        }
+    if (translatedPhrases?.error) {
+        console.error("Gemma translation error:", translatedPhrases.error);
+        return null;
+    }
 
-        const translations = translatedPhrases?.translations;
-        if (!Array.isArray(translations) || translations.length !== batch.length) {
-            console.error("Received an invalid translation batch from the background script.");
-            continue;
-        }
+    const translations = translatedPhrases?.translations;
+    if (!Array.isArray(translations) || translations.length !== batch.length) {
+        console.error("Received an invalid translation batch from the background script.");
+        return null;
+    }
 
-        for (let index = 0; index < batch.length; index += 1) {
-            const selection = batch[index];
-            if (!selection.node.isConnected) continue;
+    return translations;
+}
 
-            const replacement = createReplacementNode(
-                selection.text,
-                selection.phraseStart,
-                selection.phraseEnd,
-                translations[index]
-            );
-            selection.node.replaceWith(replacement);
-        }
+function releasePendingParagraphs(batch) {
+    void batch;
+}
+
+function applyTranslatedBatch(batch, translations) {
+    for (let index = 0; index < batch.length; index += 1) {
+        const selection = batch[index];
+        if (!selection.node.isConnected) continue;
+
+        const replacement = createReplacementNode(
+            selection.text,
+            selection.phraseStart,
+            selection.phraseEnd,
+            translations[index]
+        );
+        selection.node.replaceWith(replacement);
     }
 }
 
-async function processNodeList(nodes, settings) {
-    const selections = [];
+async function processBatch(batch, settings) {
+    const translations = await requestTranslations(batch, settings);
+    if (!translations) {
+        releasePendingParagraphs(batch);
+        return;
+    }
 
-    for (const node of nodes) {
-        const selection = getPhraseSelection(node, settings);
-        if (selection) {
-            selections.push(selection);
+    applyTranslatedBatch(batch, translations);
+}
+
+async function runBatchesWithConcurrency(batches, settings) {
+    const concurrency = Math.max(1, Math.min(2, settings.batchRequestConcurrency));
+    let nextBatchIndex = 0;
+
+    async function worker() {
+        while (nextBatchIndex < batches.length) {
+            const batchIndex = nextBatchIndex;
+            nextBatchIndex += 1;
+            await processBatch(batches[batchIndex], settings);
         }
     }
 
+    const workers = Array.from(
+        { length: Math.min(concurrency, batches.length) },
+        () => worker()
+    );
+    await Promise.all(workers);
+}
+
+async function processRoot(root, settings) {
+    const selections = collectEligibleSelections(root, settings);
+    const batches = createSelectionBatches(selections);
+
     if (selections.length === 0) return;
-    await translateSelections(selections, settings);
+    await runBatchesWithConcurrency(batches, settings);
+}
+
+function scheduleProcessing(root, settings) {
+    if (root && !processingRootElement) {
+        processingRootElement = root;
+    }
+    currentSettings = settings;
+    processingRequested = true;
+
+    if (isProcessing) {
+        return;
+    }
+
+    isProcessing = true;
+
+    void (async () => {
+        try {
+            while (processingRequested) {
+                processingRequested = false;
+                if (!processingRootElement || !currentSettings) break;
+                await processRoot(processingRootElement, currentSettings);
+            }
+        } catch (error) {
+            console.error("Processing cycle failed:", error);
+        } finally {
+            isProcessing = false;
+            if (processingRequested) {
+                scheduleProcessing(processingRootElement, currentSettings);
+            }
+        }
+    })();
 }
 
 async function walkAndProcess(root, settings) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const candidates = [];
-    let currentNode;
-
-    while ((currentNode = walker.nextNode())) {
-        candidates.push(currentNode);
-    }
-
-    await processNodeList(candidates, settings);
+    scheduleProcessing(root, settings);
 }
 
 function getProcessingRoot() {
@@ -264,6 +347,7 @@ async function loadSettings() {
             phraseMinWords: normalized.phraseMinWords,
             phraseMaxWords: normalized.phraseMaxWords,
             phraseLengthTemperature: normalized.phraseLengthTemperature,
+            batchRequestConcurrency: normalized.batchRequestConcurrency,
         };
     } catch (error) {
         console.error("Failed to load highlighting settings:", error);
@@ -272,6 +356,7 @@ async function loadSettings() {
             phraseMinWords: DEFAULT_SETTINGS.phraseMinWords,
             phraseMaxWords: DEFAULT_SETTINGS.phraseMaxWords,
             phraseLengthTemperature: DEFAULT_SETTINGS.phraseLengthTemperature,
+            batchRequestConcurrency: DEFAULT_SETTINGS.batchRequestConcurrency,
         };
     }
 }
@@ -279,6 +364,8 @@ async function loadSettings() {
 async function init() {
     const settings = await loadSettings();
     const processingRoot = getProcessingRoot();
+    processingRootElement = processingRoot;
+    currentSettings = settings;
     await walkAndProcess(processingRoot, settings);
     observeDOM(processingRoot, settings);
 }
@@ -287,21 +374,18 @@ function observeDOM(processingRoot, settings) {
     const observer = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
             if (mutation.type === "childList") {
-                const addedTextNodes = [];
-
                 mutation.addedNodes.forEach((node) => {
-                    if (node.nodeType === Node.TEXT_NODE) {
-                        addedTextNodes.push(node);
-                    } else if (node.nodeType === Node.ELEMENT_NODE) {
+                    if (
+                        node.nodeType === Node.TEXT_NODE ||
+                        node.nodeType === Node.ELEMENT_NODE
+                    ) {
                         void walkAndProcess(node, settings);
                     }
                 });
-
-                void processNodeList(addedTextNodes, settings);
             }
 
             if (mutation.type === "characterData") {
-                void processNodeList([mutation.target], settings);
+                void walkAndProcess(mutation.target, settings);
             }
         }
     });
