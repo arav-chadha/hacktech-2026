@@ -14,8 +14,6 @@ import {
 const genAIClient = new GoogleGenerativeAI(LOCAL_GEMMA_API_KEY);
 
 const SERVER_HOST = "127.0.0.1";
-const INTER_REQUEST_DELAY_MS = 1_500;
-let translationQueue = Promise.resolve();
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -25,18 +23,6 @@ function sendJson(response, statusCode, payload) {
     "Content-Type": "application/json",
   });
   response.end(JSON.stringify(payload));
-}
-
-function delay(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function enqueueTranslation(task) {
-  const queuedTask = translationQueue.catch(() => {}).then(task);
-  translationQueue = queuedTask.catch(() => {}).then(() => delay(INTER_REQUEST_DELAY_MS));
-  return queuedTask;
 }
 
 function buildTranslationPrompt(targetLanguage) {
@@ -138,33 +124,31 @@ async function streamTranslatedParagraph({ splitText, targetLanguage, onChunk })
   let streamedMarkerizedText = "";
   let lastSentMarkerizedText = "";
 
-  const finalMarkerizedText = await enqueueTranslation(async () => {
-    const streamResult = await requestGemmaStream(prompt, markerizedText);
+  const streamResult = await requestGemmaStream(prompt, markerizedText);
 
-    for await (const responseChunk of streamResult.stream) {
-      const chunkText = extractGemmaText(responseChunk);
-      if (!chunkText) {
-        continue;
-      }
-
-      streamedMarkerizedText += chunkText;
-      const parsedChunk = parseTranslatedMarkerizedText(streamedMarkerizedText, segments);
-      if (!parsedChunk.ok) {
-        throw new MarkerValidationError(parsedChunk.error);
-      }
-
-      if (
-        parsedChunk.normalizedText &&
-        parsedChunk.normalizedText !== lastSentMarkerizedText
-      ) {
-        lastSentMarkerizedText = parsedChunk.normalizedText;
-        onChunk?.(buildTranslationFromParsed(parsedChunk, segments));
-      }
+  for await (const responseChunk of streamResult.stream) {
+    const chunkText = extractGemmaText(responseChunk);
+    if (!chunkText) {
+      continue;
     }
 
-    await streamResult.response;
-    return streamedMarkerizedText;
-  });
+    streamedMarkerizedText += chunkText;
+    const parsedChunk = parseTranslatedMarkerizedText(streamedMarkerizedText, segments);
+    if (!parsedChunk.ok) {
+      throw new MarkerValidationError(parsedChunk.error);
+    }
+
+    if (
+      parsedChunk.normalizedText &&
+      parsedChunk.normalizedText !== lastSentMarkerizedText
+    ) {
+      lastSentMarkerizedText = parsedChunk.normalizedText;
+      onChunk?.(buildTranslationFromParsed(parsedChunk, segments));
+    }
+  }
+
+  await streamResult.response;
+  const finalMarkerizedText = streamedMarkerizedText;
 
   const parsedTranslation = parseTranslatedMarkerizedText(finalMarkerizedText, segments);
   if (!parsedTranslation.ok) {

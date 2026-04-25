@@ -183,6 +183,16 @@ function injectTranslatedHtml(paragraph, translatedHtml) {
     paragraph.innerHTML = translatedHtml;
 }
 
+function clearParagraphForStreaming(paragraph) {
+    paragraph.setAttribute(PROCESSED_ATTR, "true");
+    paragraph.innerHTML = "";
+}
+
+function restoreOriginalParagraphHtml(paragraph, originalHtml) {
+    paragraph.removeAttribute(PROCESSED_ATTR);
+    paragraph.innerHTML = originalHtml;
+}
+
 function getParagraphSelection(node) {
     if (!isValidParagraphNode(node)) return;
     if (processedNodes.has(node)) return;
@@ -212,6 +222,8 @@ async function translateSelection(selection, settings) {
     await new Promise((resolve) => {
         const port = chrome.runtime.connect({ name: "translation-stream" });
         let isSettled = false;
+        let hasRenderedChunk = false;
+        const originalHtml = selection.node.innerHTML;
 
         function finish() {
             if (isSettled) return;
@@ -226,9 +238,14 @@ async function translateSelection(selection, settings) {
             resolve();
         }
 
+        clearParagraphForStreaming(selection.node);
+
         port.onMessage.addListener((message) => {
             if (message?.type === "error") {
                 console.error("Gemma translation error:", message.error);
+                if (!hasRenderedChunk && selection.node.isConnected) {
+                    restoreOriginalParagraphHtml(selection.node, originalHtml);
+                }
                 finish();
                 return;
             }
@@ -247,6 +264,7 @@ async function translateSelection(selection, settings) {
                 return;
             }
 
+            hasRenderedChunk = true;
             injectTranslatedHtml(selection.node, translatedHtml);
 
             if (message.type === "done") {
@@ -262,6 +280,9 @@ async function translateSelection(selection, settings) {
             const streamError = chrome.runtime.lastError?.message;
             if (streamError) {
                 console.error("Translation stream disconnected:", streamError);
+            }
+            if (!hasRenderedChunk && selection.node.isConnected) {
+                restoreOriginalParagraphHtml(selection.node, originalHtml);
             }
             resolve();
         });
