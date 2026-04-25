@@ -1,4 +1,3 @@
-import browser from "webextension-polyfill";
 import { DEFAULT_SETTINGS, LANGUAGE_STORAGE_KEY } from "../shared/settings";
 
 const processedNodes = new WeakSet();
@@ -82,24 +81,108 @@ function scoreProcessingRootCandidate(element) {
     return text.length + (paragraphs * 200) - (links * 40) - (controls * 150);
 }
 
-function isValidTextNode(node) {
-    if (!node || node.nodeType !== Node.TEXT_NODE) return false;
-    if (!node.nodeValue.trim()) return false;
-
-    const parent = node.parentElement;
-    if (!parent) return false;
-    if (parent.closest(EXCLUDED_CONTAINER_SELECTOR)) return false;
-
-    const tag = parent.tagName.toLowerCase();
-    if (["script", "style", "noscript", "textarea"].includes(tag)) return false;
-
-    if (getWordMatches(node.nodeValue).length < 3) return false;
-
-    return true;
-}
-
 function getWordMatches(text) {
     return Array.from(text.matchAll(WORD_PATTERN));
+}
+
+function normalizeWhitespace(text) {
+    return text.replace(/\s+/g, " ").trim();
+}
+
+function splitPlainText(text) {
+    const normalizedText = normalizeWhitespace(text);
+    return normalizedText ? normalizedText.split(" ") : [];
+}
+
+function buildStartTag(element) {
+    const tagName = element.tagName.toLowerCase();
+    const attributes = Array.from(element.attributes)
+        .map((attribute) => ` ${attribute.name}="${attribute.value}"`)
+        .join("");
+
+    return `<${tagName}${attributes}>`;
+}
+
+function buildEndTag(element) {
+    return `</${element.tagName.toLowerCase()}>`;
+}
+
+function serializeContentNode(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+        const rawText = normalizeWhitespace(node.nodeValue || "");
+        if (!rawText) return null;
+
+        return {
+            rawText,
+            splitText: splitPlainText(rawText),
+        };
+    }
+
+    if (node.nodeType !== Node.ELEMENT_NODE) return null;
+
+    const element = node;
+    if (element.matches(EXCLUDED_CONTAINER_SELECTOR)) return null;
+
+    const tagName = element.tagName.toLowerCase();
+    if (["script", "style", "noscript", "textarea"].includes(tagName)) return null;
+
+    const childSplitText = [];
+    const childRawParts = [];
+
+    for (const child of element.childNodes) {
+        const serializedChild = serializeContentNode(child);
+        if (!serializedChild) continue;
+
+        childSplitText.push(...serializedChild.splitText);
+        childRawParts.push(serializedChild.rawText);
+    }
+
+    const rawText = normalizeWhitespace(childRawParts.join(" "));
+    if (!rawText) return null;
+
+    return {
+        rawText,
+        splitText: [
+            {
+                text: rawText,
+                start_tag: buildStartTag(element),
+                end_tag: buildEndTag(element),
+                splitText: childSplitText,
+            },
+        ],
+    };
+}
+
+function serializeParagraph(paragraph) {
+    const splitText = [];
+    const rawParts = [];
+
+    for (const child of paragraph.childNodes) {
+        const serializedChild = serializeContentNode(child);
+        if (!serializedChild) continue;
+
+        splitText.push(...serializedChild.splitText);
+        rawParts.push(serializedChild.rawText);
+    }
+
+    return {
+        rawText: normalizeWhitespace(rawParts.join(" ")),
+        splitText,
+    };
+}
+
+function isValidParagraphNode(node) {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+
+    const paragraph = node;
+    if (!(paragraph instanceof HTMLParagraphElement)) return false;
+    if (paragraph.matches(EXCLUDED_CONTAINER_SELECTOR)) return false;
+
+    const text = normalizeWhitespace(paragraph.innerText || paragraph.textContent || "");
+    if (!text) return false;
+    if (getWordMatches(text).length < 3) return false;
+
+    return true;
 }
 
 function createReplacementNode(replacementText) {
@@ -115,19 +198,20 @@ function createReplacementNode(replacementText) {
     return wrapper;
 }
 
-function getPhraseSelection(node) {
-    if (!isValidTextNode(node)) return;
+function getParagraphSelection(node) {
+    if (!isValidParagraphNode(node)) return;
     if (processedNodes.has(node)) return;
 
-    processedNodes.add(node);
+    const paragraph = node;
+    processedNodes.add(paragraph);
 
-    const text = node.nodeValue;
-    const wordMatches = getWordMatches(text);
-    if (wordMatches.length === 0) return;
+    const { rawText, splitText } = serializeParagraph(paragraph);
+    if (!rawText || getWordMatches(rawText).length === 0) return;
 
     return {
-        node,
-        text,
+        node: paragraph,
+        rawText,
+        splitText,
     };
 }
 
@@ -142,7 +226,7 @@ async function translateSelections(selections, settings) {
             translatedPhrases = await chrome.runtime.sendMessage({
                 type: "TRANSLATE_PHRASES",
                 payload: {
-                    phrases: batch.map((selection) => selection.text),
+                    phrases: batch.map((selection) => selection.rawText),
                     targetLanguage: settings.selectedLanguage,
                 },
             });
@@ -166,17 +250,18 @@ async function translateSelections(selections, settings) {
             const selection = batch[index];
             if (!selection.node.isConnected) continue;
 
+            selection.node.setAttribute(PROCESSED_ATTR, "true");
             const replacement = createReplacementNode(translations[index]);
-            selection.node.replaceWith(replacement);
+            selection.node.replaceChildren(replacement);
         }
     }
 }
 
-async function processNodeList(nodes, settings) {
+async function processParagraphList(nodes, settings) {
     const selections = [];
 
     for (const node of nodes) {
-        const selection = getPhraseSelection(node);
+        const selection = getParagraphSelection(node);
         
         if (selection) {
             selections.push(selection);
@@ -189,16 +274,30 @@ async function processNodeList(nodes, settings) {
     await translateSelections(selections, settings);
 }
 
-async function walkAndProcess(root, settings) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const candidates = [];
-    let currentNode;
+function getParagraphCandidates(root) {
+    if (!root) return [];
 
-    while ((currentNode = walker.nextNode())) {
-        candidates.push(currentNode);
+    if (root.nodeType === Node.TEXT_NODE) {
+        const paragraph = root.parentElement?.closest("p");
+        return paragraph ? [paragraph] : [];
     }
 
-    await processNodeList(candidates, settings);
+    if (root.nodeType !== Node.ELEMENT_NODE) return [];
+
+    const element = root;
+    const paragraphs = [];
+
+    if (element.matches("p")) {
+        paragraphs.push(element);
+    }
+
+    paragraphs.push(...element.querySelectorAll("p"));
+    return Array.from(new Set(paragraphs));
+}
+
+async function walkAndProcess(root, settings) {
+    const candidates = getParagraphCandidates(root);
+    await processParagraphList(candidates, settings);
 }
 
 function getProcessingRoot() {
@@ -261,21 +360,13 @@ function observeDOM(processingRoot, settings) {
         }
         for (const mutation of mutations) {
             if (mutation.type === "childList") {
-                const addedTextNodes = [];
-
                 mutation.addedNodes.forEach((node) => {
-                    if (node.nodeType === Node.TEXT_NODE) {
-                        addedTextNodes.push(node);
-                    } else if (node.nodeType === Node.ELEMENT_NODE) {
-                        void walkAndProcess(node, settings);
-                    }
+                    void walkAndProcess(node, settings);
                 });
-
-                void processNodeList(addedTextNodes, settings);
             }
 
             if (mutation.type === "characterData") {
-                void processNodeList([mutation.target], settings);
+                void walkAndProcess(mutation.target, settings);
             }
         }
     });
