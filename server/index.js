@@ -15,7 +15,7 @@ const genAIClient = new GoogleGenerativeAI(LOCAL_GEMMA_API_KEY);
 const SERVER_HOST = "127.0.0.1";
 const MAX_TRANSLATION_ATTEMPTS = 3;
 const FALLBACK_RETRY_DELAY_MS = 60_000;
-const ALIGNMENT_WORD_PATTERN = /\b[\p{L}\p{N}'’-]+\b/gu;
+const ALIGNMENT_WORD_PATTERN = /[\p{L}\p{N}\p{M}'’-]+/gu;
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -76,8 +76,9 @@ function extractGemmaText(responseJson) {
 }
 
 function tokenizeWords(text) {
+  const normalizedText = String(text ?? "").normalize("NFC");
   const tokenPattern = new RegExp(ALIGNMENT_WORD_PATTERN.source, ALIGNMENT_WORD_PATTERN.flags);
-  return Array.from(String(text ?? "").matchAll(tokenPattern)).map((match, index) => ({
+  return Array.from(normalizedText.matchAll(tokenPattern)).map((match, index) => ({
     index,
     text: match[0],
     start: match.index ?? 0,

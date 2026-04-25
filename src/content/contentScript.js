@@ -92,11 +92,11 @@ function scoreProcessingRootCandidate(element) {
 }
 
 function getWordMatches(text) {
-    return Array.from(text.matchAll(WORD_PATTERN));
+    return Array.from(String(text ?? "").normalize("NFC").matchAll(/[\p{L}\p{N}\p{M}'’-]+/gu));
 }
 
 function createWordPattern() {
-    return new RegExp(WORD_PATTERN.source, WORD_PATTERN.flags);
+    return /[\p{L}\p{N}\p{M}'’-]+/gu;
 }
 
 function buildStartTag(element) {
@@ -350,15 +350,17 @@ function applyAlignmentMarkup(paragraph, alignments) {
         return;
     }
 
+    const paragraphText = paragraph.textContent || "";
+    const tokenMatches = Array.from(paragraphText.matchAll(createWordPattern()));
+    if (tokenMatches.length === 0) {
+        return;
+    }
+
     const walker = document.createTreeWalker(
         paragraph,
         NodeFilter.SHOW_TEXT,
         {
             acceptNode(node) {
-                if (!node.nodeValue || getWordMatches(node.nodeValue).length === 0) {
-                    return NodeFilter.FILTER_REJECT;
-                }
-
                 if (node.parentElement?.hasAttribute(ALIGNMENT_TOKEN_ATTR)) {
                     return NodeFilter.FILTER_REJECT;
                 }
@@ -370,46 +372,70 @@ function applyAlignmentMarkup(paragraph, alignments) {
 
     const textNodes = [];
     let currentNode = walker.nextNode();
+    let textOffset = 0;
     while (currentNode) {
-        textNodes.push(currentNode);
+        const text = currentNode.nodeValue || "";
+        textNodes.push({
+            node: currentNode,
+            text,
+            start: textOffset,
+            end: textOffset + text.length,
+        });
+        textOffset += text.length;
         currentNode = walker.nextNode();
     }
 
-    let globalTokenIndex = 0;
-    for (const node of textNodes) {
-        const text = node.nodeValue || "";
-        const matches = Array.from(text.matchAll(createWordPattern()));
-        if (matches.length === 0) {
+    const tokenSegments = tokenMatches.map((match, tokenIndex) => {
+        const alignment = tokenAlignments.get(tokenIndex);
+        return {
+            start: match.index ?? 0,
+            end: (match.index ?? 0) + match[0].length,
+            alignment,
+        };
+    });
+
+    for (const textNode of textNodes.reverse()) {
+        const { node, text, start: nodeStart, end: nodeEnd } = textNode;
+        if (!text || getWordMatches(text).length === 0) {
+            continue;
+        }
+
+        const intersectingSegments = tokenSegments
+            .filter((segment) => segment.end > nodeStart && segment.start < nodeEnd)
+            .map((segment) => ({
+                localStart: Math.max(0, segment.start - nodeStart),
+                localEnd: Math.min(text.length, segment.end - nodeStart),
+                alignment: segment.alignment,
+            }))
+            .filter((segment) => segment.localEnd > segment.localStart)
+            .sort((a, b) => a.localStart - b.localStart);
+
+        if (intersectingSegments.length === 0) {
             continue;
         }
 
         const fragment = document.createDocumentFragment();
         let cursor = 0;
 
-        for (const match of matches) {
-            const matchStart = match.index ?? 0;
-            const matchText = match[0];
-            const matchEnd = matchStart + matchText.length;
-            const alignment = tokenAlignments.get(globalTokenIndex);
-
-            if (matchStart > cursor) {
-                fragment.append(text.slice(cursor, matchStart));
+        for (const segment of intersectingSegments) {
+            if (segment.localStart > cursor) {
+                fragment.append(text.slice(cursor, segment.localStart));
             }
 
-            if (alignment) {
+            const segmentText = text.slice(segment.localStart, segment.localEnd);
+            if (segment.alignment) {
                 const span = document.createElement("span");
-                span.setAttribute(ALIGNMENT_TOKEN_ATTR, alignment.id);
-                span.dataset.alignmentId = alignment.id;
-                span.dataset.sourceText = alignment.sourceText;
-                span.dataset.targetText = alignment.targetText;
-                span.textContent = matchText;
+                span.setAttribute(ALIGNMENT_TOKEN_ATTR, segment.alignment.id);
+                span.dataset.alignmentId = segment.alignment.id;
+                span.dataset.sourceText = segment.alignment.sourceText;
+                span.dataset.targetText = segment.alignment.targetText;
+                span.textContent = segmentText;
                 fragment.append(span);
             } else {
-                fragment.append(matchText);
+                fragment.append(segmentText);
             }
 
-            cursor = matchEnd;
-            globalTokenIndex += 1;
+            cursor = segment.localEnd;
         }
 
         if (cursor < text.length) {
