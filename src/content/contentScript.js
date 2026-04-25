@@ -204,42 +204,77 @@ async function translateSelections(selections, settings) {
     if (selections.length === 0) return;
 
     for (const selection of selections) {
-        translateSelection(selection, settings);
+        void translateSelection(selection, settings);
     }
 }
 
 async function translateSelection(selection, settings) {
-    let translationResult;
-    try {
-        translationResult = await chrome.runtime.sendMessage({
-            type: "TRANSLATE_PHRASES",
+    await new Promise((resolve) => {
+        const port = chrome.runtime.connect({ name: "translation-stream" });
+        let isSettled = false;
+
+        function finish() {
+            if (isSettled) return;
+            isSettled = true;
+
+            try {
+                port.disconnect();
+            } catch (_error) {
+                // Ignore disconnect races while the stream is shutting down.
+            }
+
+            resolve();
+        }
+
+        port.onMessage.addListener((message) => {
+            if (message?.type === "error") {
+                console.error("Gemma translation error:", message.error);
+                finish();
+                return;
+            }
+
+            if (message?.type !== "chunk" && message?.type !== "done") {
+                return;
+            }
+
+            const translatedHtml = String(message?.translation?.html ?? "").trim();
+            if (!translatedHtml) {
+                return;
+            }
+
+            if (!selection.node.isConnected) {
+                finish();
+                return;
+            }
+
+            injectTranslatedHtml(selection.node, translatedHtml);
+
+            if (message.type === "done") {
+                finish();
+            }
+        });
+
+        port.onDisconnect.addListener(() => {
+            if (isSettled) {
+                return;
+            }
+
+            const streamError = chrome.runtime.lastError?.message;
+            if (streamError) {
+                console.error("Translation stream disconnected:", streamError);
+            }
+            resolve();
+        });
+
+        port.postMessage({
+            type: "TRANSLATE_PHRASES_STREAM",
             payload: {
                 rawText: selection.rawText,
                 splitText: selection.splitText,
                 targetLanguage: settings.selectedLanguage,
             },
         });
-    } catch (error) {
-        console.error("Failed to translate phrases:", error);
-        return;
-    }
-
-    if (translationResult?.error) {
-        console.error("Gemma translation error:", translationResult.error);
-        return;
-    }
-
-    const translatedHtml = String(translationResult?.translation?.html ?? "").trim();
-    if (!translatedHtml) {
-        console.error("Received an invalid translation payload from the background script.");
-        return;
-    }
-
-    if (!selection.node.isConnected) {
-        return;
-    }
-
-    injectTranslatedHtml(selection.node, translatedHtml);
+    });
 }
 
 async function processParagraphList(nodes, settings) {

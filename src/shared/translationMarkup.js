@@ -9,6 +9,20 @@ function normalizeMarkerizedText(text) {
   return String(text ?? "").replace(/\s+/g, " ").trim();
 }
 
+function stripTrailingPartialMarker(text) {
+  const markerStartIndex = text.lastIndexOf("[[");
+  if (markerStartIndex === -1) {
+    return text;
+  }
+
+  const markerEndIndex = text.indexOf("]]", markerStartIndex);
+  if (markerEndIndex !== -1) {
+    return text;
+  }
+
+  return text.slice(0, markerStartIndex);
+}
+
 function escapeHtml(text) {
   return text
     .replaceAll("&", "&amp;")
@@ -105,7 +119,7 @@ export function parseTranslatedMarkerizedText(translatedText, segments) {
   const markerPattern = new RegExp(MARKER_TOKEN_SOURCE);
   const seenMarkers = new Set();
   const root = { type: "root", children: [] };
-  const stack = [root];
+  const stack = [{ node: root, parentChildren: null, index: -1 }];
   let cursor = 0;
 
   function appendText(target, text) {
@@ -123,9 +137,25 @@ export function parseTranslatedMarkerizedText(translatedText, segments) {
     children.push({ type: "text", text });
   }
 
+  function serializeNodes(nodes) {
+    return nodes
+      .map((node) => {
+        if (node.type === "text") {
+          return node.text;
+        }
+
+        if (node.type === "segment") {
+          return `[[${node.id}]]${serializeNodes(node.children)}[[/${node.id}]]`;
+        }
+
+        return "";
+      })
+      .join("");
+  }
+
   let match;
   while ((match = markerPattern.exec(normalizedText)) !== null) {
-    appendText(stack[stack.length - 1], normalizedText.slice(cursor, match.index));
+    appendText(stack[stack.length - 1].node, normalizedText.slice(cursor, match.index));
     cursor = match.index + match[0].length;
 
     const token = match[1];
@@ -148,7 +178,7 @@ export function parseTranslatedMarkerizedText(translatedText, segments) {
         };
       }
 
-      const currentParent = stack[stack.length - 1];
+      const currentParent = stack[stack.length - 1].node;
       const currentParentId =
         currentParent.type === "segment" ? currentParent.id : null;
 
@@ -165,13 +195,18 @@ export function parseTranslatedMarkerizedText(translatedText, segments) {
         children: [],
       };
 
-      stack[stack.length - 1].children.push(node);
-      stack.push(node);
+      const parentChildren = currentParent.children;
+      parentChildren.push(node);
+      stack.push({
+        node,
+        parentChildren,
+        index: parentChildren.length - 1,
+      });
       seenMarkers.add(`open:${markerId}`);
       continue;
     }
 
-    const currentSegment = stack[stack.length - 1];
+    const currentSegment = stack[stack.length - 1].node;
     if (currentSegment.type !== "segment" || currentSegment.id !== markerId) {
       return {
         ok: false,
@@ -190,27 +225,26 @@ export function parseTranslatedMarkerizedText(translatedText, segments) {
     seenMarkers.add(`close:${markerId}`);
   }
 
-  appendText(stack[stack.length - 1], normalizedText.slice(cursor));
+  appendText(
+    stack[stack.length - 1].node,
+    stripTrailingPartialMarker(normalizedText.slice(cursor))
+  );
 
   if (stack.length !== 1) {
-    return {
-      ok: false,
-      error: `Marker ${stack[stack.length - 1].id} was not closed.`,
-    };
+    const firstUnclosedFrame = stack[1];
+    firstUnclosedFrame.parentChildren.splice(firstUnclosedFrame.index);
   }
 
-  for (const { id } of segments) {
-    if (!seenMarkers.has(`open:${id}`) || !seenMarkers.has(`close:${id}`)) {
-      return {
-        ok: false,
-        error: `Marker ${id} is missing from the translated output.`,
-      };
-    }
-  }
+  const completedText = normalizeMarkerizedText(serializeNodes(root.children));
 
   return {
     ok: true,
-    normalizedText,
+    complete:
+      stack.length === 1 &&
+      segments.every(
+        ({ id }) => seenMarkers.has(`open:${id}`) && seenMarkers.has(`close:${id}`)
+      ),
+    normalizedText: completedText,
     tree: root.children,
   };
 }

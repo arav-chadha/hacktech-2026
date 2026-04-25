@@ -13,10 +13,7 @@ import {
 
 const genAIClient = new GoogleGenerativeAI(LOCAL_GEMMA_API_KEY);
 
-const GEMMA_ENDPOINT = `https://googleapis.com${GEMMA_MODEL}:streamGenerateContent`;
 const SERVER_HOST = "127.0.0.1";
-const MAX_TRANSLATION_ATTEMPTS = 3;
-const FALLBACK_RETRY_DELAY_MS = 60_000;
 const INTER_REQUEST_DELAY_MS = 1_500;
 let translationQueue = Promise.resolve();
 
@@ -43,7 +40,6 @@ function enqueueTranslation(task) {
 }
 
 function buildTranslationPrompt(targetLanguage) {
-
   return [
     `Rewrite input in ${targetLanguage}`,
     "Translate naturally, especially text in markers",
@@ -52,56 +48,8 @@ function buildTranslationPrompt(targetLanguage) {
     "Dont: add remove rename duplicate reorder marker bounds",
     "Keep marker structure identical to input",
     "Return only translated paragraph w/ markers",
-    "Do not return markdown code fences notes text or alternatives"
-    ].join("\n")
-
-  return [
-    `Translate the paragraph into ${targetLanguage}.`,
-    "Preserve every marker exactly as written, including both opening and closing forms.",
-    "Do not add, remove, rename, duplicate, or reorder marker boundaries.",
-    "Keep the same marker nesting structure as the input.",
-    "Translate naturally, including text inside markers.",
-    "Return only the translated paragraph with markers preserved.",
-    "Do not output markdown, explanations, code fences, notes, or alternatives.",
-    `Input: ${JSON.stringify(markerizedText)}`,
+    "Do not return markdown code fences notes text or alternatives",
   ].join("\n");
-}
-
-function parseRetryDelayMs(retryDelay) {
-  if (typeof retryDelay !== "string") {
-    return null;
-  }
-
-  const seconds = Number.parseFloat(retryDelay.replace(/s$/, ""));
-  if (!Number.isFinite(seconds)) {
-    return null;
-  }
-
-  return Math.ceil(seconds * 1000);
-}
-
-function getRetryDelayMs(statusCode, responseJson, responseHeaders) {
-  const retryAfterHeader = responseHeaders.get("retry-after");
-  if (retryAfterHeader) {
-    const retryAfterSeconds = Number.parseFloat(retryAfterHeader);
-    if (Number.isFinite(retryAfterSeconds)) {
-      return Math.ceil(retryAfterSeconds * 1000);
-    }
-  }
-
-  const retryInfo = responseJson?.error?.details?.find(
-    (detail) => detail?.["@type"] === "type.googleapis.com/google.rpc.RetryInfo"
-  );
-  const retryDelayMs = parseRetryDelayMs(retryInfo?.retryDelay);
-  if (retryDelayMs) {
-    return retryDelayMs;
-  }
-
-  if (statusCode === 429) {
-    return FALLBACK_RETRY_DELAY_MS;
-  }
-
-  return null;
 }
 
 function extractGemmaText(responseJson) {
@@ -138,7 +86,31 @@ async function readJsonBody(request) {
   return rawBody ? JSON.parse(rawBody) : {};
 }
 
-async function requestGemma(prompt, text) {
+function buildTranslationFromParsed(parsedTranslation, segments) {
+  return {
+    html: reconstructHtmlFromParsedMarkers(parsedTranslation.tree, segments),
+    text: buildPlainTextFromParsedMarkers(parsedTranslation.tree),
+    markerizedText: parsedTranslation.normalizedText,
+  };
+}
+
+function writeStreamEvent(response, payload) {
+  response.write(`${JSON.stringify(payload)}\n`);
+}
+
+function beginTranslationStream(response) {
+  response.writeHead(200, {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "X-Content-Type-Options": "nosniff",
+  });
+}
+
+async function requestGemmaStream(prompt, text) {
   const model = genAIClient.getGenerativeModel(
     {
       model: GEMMA_MODEL,
@@ -147,71 +119,63 @@ async function requestGemma(prompt, text) {
   );
   const generationConfig = {
     temperature: 0,
-    responseMimeType: "text/plain"
+    responseMimeType: "text/plain",
   };
 
-  const response = await model.generateContent({
+  return model.generateContentStream({
     contents: [{ role: "user", parts: [{ "text": text }] }],
-    generationConfig
-  }
-  );
-
-  return response.response.text();
+    generationConfig,
+  });
 }
 
-async function requestGemmaWithRetries(prompt, text) {
-  let attempt = 0;
-  let lastError = null;
-
-  while (attempt < MAX_TRANSLATION_ATTEMPTS) {
-    attempt += 1;
-
-    try {
-      return await requestGemma(prompt, text);
-    } catch (error) {
-      lastError = error;
-
-      if (!(error instanceof RetryableTranslationError) || attempt >= MAX_TRANSLATION_ATTEMPTS) {
-        break;
-      }
-
-      await delay(error.retryDelayMs);
-    }
-  }
-
-  throw lastError ?? new Error("Translation failed.");
-}
-
-async function translateParagraph({ splitText, targetLanguage }) {
+async function streamTranslatedParagraph({ splitText, targetLanguage, onChunk }) {
   const { markerizedText, segments } = buildMarkerizedTextFromSplitText(splitText);
   if (!markerizedText) {
     throw new Error("Paragraph did not contain any translatable text.");
   }
 
   const prompt = buildTranslationPrompt(targetLanguage);
-  console.log("Running")
-  const translatedMarkerizedText = await enqueueTranslation(() =>
-    requestGemmaWithRetries(prompt, markerizedText)
-  );
+  let streamedMarkerizedText = "";
+  let lastSentMarkerizedText = "";
 
-  console.log("translation", translatedMarkerizedText)
+  const finalMarkerizedText = await enqueueTranslation(async () => {
+    const streamResult = await requestGemmaStream(prompt, markerizedText);
 
-  const parsedTranslation = parseTranslatedMarkerizedText(
-    translatedMarkerizedText,
-    segments
-  );
+    for await (const responseChunk of streamResult.stream) {
+      const chunkText = extractGemmaText(responseChunk);
+      if (!chunkText) {
+        continue;
+      }
 
-  // console.log("parsedTranslation", parsedTranslation)
+      streamedMarkerizedText += chunkText;
+      const parsedChunk = parseTranslatedMarkerizedText(streamedMarkerizedText, segments);
+      if (!parsedChunk.ok) {
+        throw new MarkerValidationError(parsedChunk.error);
+      }
 
+      if (
+        parsedChunk.normalizedText &&
+        parsedChunk.normalizedText !== lastSentMarkerizedText
+      ) {
+        lastSentMarkerizedText = parsedChunk.normalizedText;
+        onChunk?.(buildTranslationFromParsed(parsedChunk, segments));
+      }
+    }
+
+    await streamResult.response;
+    return streamedMarkerizedText;
+  });
+
+  const parsedTranslation = parseTranslatedMarkerizedText(finalMarkerizedText, segments);
   if (!parsedTranslation.ok) {
     throw new MarkerValidationError(parsedTranslation.error);
   }
 
-  return {
-    html: reconstructHtmlFromParsedMarkers(parsedTranslation.tree, segments),
-    text: buildPlainTextFromParsedMarkers(parsedTranslation.tree),
-    markerizedText: parsedTranslation.normalizedText,
-  };
+  if (!parsedTranslation.complete) {
+    throw new MarkerValidationError("Model returned incomplete marker output.");
+  }
+
+  return buildTranslationFromParsed(parsedTranslation, segments);
 }
 
 const server = http.createServer(async (request, response) => {
@@ -262,30 +226,50 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    const translation = await translateParagraph({
+    beginTranslationStream(response);
+
+    const translation = await streamTranslatedParagraph({
       splitText,
       targetLanguage,
+      onChunk(partialTranslation) {
+        writeStreamEvent(response, {
+          type: "chunk",
+          sourceText,
+          translation: partialTranslation,
+        });
+      },
     });
 
-    sendJson(response, 200, {
-      translation,
+    writeStreamEvent(response, {
+      type: "done",
       sourceText,
+      translation,
     });
+    response.end();
   } catch (error) {
     console.error("Translation request failed:", error);
 
-    if (error instanceof MarkerValidationError) {
-      sendJson(response, 422, {
-        error: `Model returned invalid marker output: ${error.message}`,
+    if (response.headersSent) {
+      writeStreamEvent(response, {
+        type: "error",
+        error:
+          error instanceof MarkerValidationError
+            ? `Model returned invalid marker output: ${error.message}`
+            : error.message,
+        retryAfterMs:
+          error instanceof RetryableTranslationError ? error.retryDelayMs : null,
       });
+      response.end();
       return;
     }
 
-    const retryAfterMs =
-      error instanceof RetryableTranslationError ? error.retryDelayMs : null;
-    sendJson(response, 500, {
-      error: error.message,
-      retryAfterMs,
+    sendJson(response, error instanceof MarkerValidationError ? 422 : 500, {
+      error:
+        error instanceof MarkerValidationError
+          ? `Model returned invalid marker output: ${error.message}`
+          : error.message,
+      retryAfterMs:
+        error instanceof RetryableTranslationError ? error.retryDelayMs : null,
     });
   }
 });
