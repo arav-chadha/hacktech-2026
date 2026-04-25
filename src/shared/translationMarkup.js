@@ -6,7 +6,7 @@ export function normalizeWhitespace(text) {
 }
 
 function normalizeMarkerizedText(text) {
-  return String(text ?? "").replace(/\s+/g, " ").trim();
+  return String(text ?? "").replace(/\r\n?/g, "\n");
 }
 
 function stripTrailingPartialMarker(text) {
@@ -235,7 +235,7 @@ export function parseTranslatedMarkerizedText(translatedText, segments) {
     firstUnclosedFrame.parentChildren.splice(firstUnclosedFrame.index);
   }
 
-  const completedText = normalizeMarkerizedText(serializeNodes(root.children));
+  const completedText = serializeNodes(root.children);
 
   return {
     ok: true,

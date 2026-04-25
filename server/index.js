@@ -6,7 +6,6 @@ import {
   buildMarkerizedTextFromSplitText,
   buildPlainTextFromParsedMarkers,
   buildRawTextFromSplitText,
-  normalizeWhitespace,
   parseTranslatedMarkerizedText,
   reconstructHtmlFromParsedMarkers,
 } from "../src/shared/translationMarkup.js";
@@ -40,6 +39,9 @@ function logServerEvent(event, details = {}) {
 function buildTranslationPrompt(targetLanguage) {
   return [
     `Rewrite input in ${targetLanguage}`,
+    "Only translate 10% of the text, focusing on short phrases and words",
+    "Keep spacing and punctuation identical to input",
+    "Preserve whitespace between translated words; do not merge or remove spaces",
     "Translate naturally, especially text in markers",
     "Do not surround text w/ * \' or \"",
     "Preserve markers exactly, both open and closed forms",
@@ -51,11 +53,9 @@ function buildTranslationPrompt(targetLanguage) {
 }
 
 function extractGemmaText(responseJson) {
-  return normalizeWhitespace(
-    responseJson?.candidates?.[0]?.content?.parts
-      ?.map((part) => String(part?.text ?? ""))
-      .join("")
-  );
+  return responseJson?.candidates?.[0]?.content?.parts
+    ?.map((part) => String(part?.text ?? ""))
+    .join("") ?? "";
 }
 
 class RetryableTranslationError extends Error {
