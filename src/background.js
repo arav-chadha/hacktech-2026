@@ -39,8 +39,10 @@ async function streamTranslation({
   rawText,
   splitText,
   targetLanguage,
+  translationLevel,
   phraseMinWords,
   phraseMaxWords,
+  phraseCoveragePercent,
   phraseLengthTemperature,
   onEvent,
 }) {
@@ -53,8 +55,10 @@ async function streamTranslation({
       rawText,
       splitText,
       targetLanguage,
+      translationLevel,
       phraseMinWords,
       phraseMaxWords,
+      phraseCoveragePercent,
       phraseLengthTemperature,
     }),
   });

@@ -1,6 +1,7 @@
 import {
     DEFAULT_SETTINGS,
     LANGUAGE_STORAGE_KEY,
+    PHRASE_COVERAGE_STORAGE_KEY,
     PHRASE_MAX_STORAGE_KEY,
     PHRASE_MIN_STORAGE_KEY,
     PHRASE_TEMPERATURE_STORAGE_KEY,
@@ -622,8 +623,10 @@ async function translateSelection(selection, settings) {
                 rawText: selection.rawText,
                 splitText: selection.splitText,
                 targetLanguage: settings.selectedLanguage,
+                translationLevel: settings.translationLevel,
                 phraseMinWords: settings.phraseMinWords,
                 phraseMaxWords: settings.phraseMaxWords,
+                phraseCoveragePercent: settings.phraseCoveragePercent,
                 phraseLengthTemperature: settings.phraseLengthTemperature,
             },
         });

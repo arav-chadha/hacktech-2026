@@ -5,17 +5,22 @@ import "./Popup.css";
 import {
   DEFAULT_SETTINGS,
   LANGUAGE_STORAGE_KEY,
+  PHRASE_COVERAGE_STORAGE_KEY,
   PHRASE_MAX_STORAGE_KEY,
   PHRASE_MIN_STORAGE_KEY,
   PHRASE_TEMPERATURE_STORAGE_KEY,
+  SETTINGS_PRESETS,
+  TRANSLATION_LEVEL_STORAGE_KEY,
   normalizeSettings,
 } from "../shared/settings";
 
 export default function Popup() {
   const [settings, setSettings] = useState({
     [LANGUAGE_STORAGE_KEY]: DEFAULT_SETTINGS[LANGUAGE_STORAGE_KEY],
+    [TRANSLATION_LEVEL_STORAGE_KEY]: DEFAULT_SETTINGS[TRANSLATION_LEVEL_STORAGE_KEY],
     [PHRASE_MIN_STORAGE_KEY]: String(DEFAULT_SETTINGS[PHRASE_MIN_STORAGE_KEY]),
     [PHRASE_MAX_STORAGE_KEY]: String(DEFAULT_SETTINGS[PHRASE_MAX_STORAGE_KEY]),
+    [PHRASE_COVERAGE_STORAGE_KEY]: String(DEFAULT_SETTINGS[PHRASE_COVERAGE_STORAGE_KEY]),
     [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
       DEFAULT_SETTINGS[PHRASE_TEMPERATURE_STORAGE_KEY]
     ),
@@ -31,8 +36,10 @@ export default function Popup() {
         const normalizedSettings = normalizeSettings(storedValues);
         setSettings({
           [LANGUAGE_STORAGE_KEY]: normalizedSettings[LANGUAGE_STORAGE_KEY],
+          [TRANSLATION_LEVEL_STORAGE_KEY]: normalizedSettings[TRANSLATION_LEVEL_STORAGE_KEY],
           [PHRASE_MIN_STORAGE_KEY]: String(normalizedSettings[PHRASE_MIN_STORAGE_KEY]),
           [PHRASE_MAX_STORAGE_KEY]: String(normalizedSettings[PHRASE_MAX_STORAGE_KEY]),
+          [PHRASE_COVERAGE_STORAGE_KEY]: String(normalizedSettings[PHRASE_COVERAGE_STORAGE_KEY]),
           [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
             normalizedSettings[PHRASE_TEMPERATURE_STORAGE_KEY]
           ),
@@ -49,6 +56,19 @@ export default function Popup() {
 
   function handleFieldChange(event) {
     const { name, value } = event.target;
+    if (name === TRANSLATION_LEVEL_STORAGE_KEY) {
+      const preset = SETTINGS_PRESETS[value] ?? DEFAULT_SETTINGS;
+      setSettings((currentSettings) => ({
+        ...currentSettings,
+        [TRANSLATION_LEVEL_STORAGE_KEY]: value,
+        [PHRASE_MIN_STORAGE_KEY]: String(preset[PHRASE_MIN_STORAGE_KEY]),
+        [PHRASE_MAX_STORAGE_KEY]: String(preset[PHRASE_MAX_STORAGE_KEY]),
+        [PHRASE_COVERAGE_STORAGE_KEY]: String(preset[PHRASE_COVERAGE_STORAGE_KEY]),
+        [PHRASE_TEMPERATURE_STORAGE_KEY]: String(preset[PHRASE_TEMPERATURE_STORAGE_KEY]),
+      }));
+      return;
+    }
+
     setSettings((currentSettings) => ({
       ...currentSettings,
       [name]: value,
@@ -62,16 +82,20 @@ export default function Popup() {
     try {
       const normalizedSettings = normalizeSettings({
         [LANGUAGE_STORAGE_KEY]: settings[LANGUAGE_STORAGE_KEY],
+        [TRANSLATION_LEVEL_STORAGE_KEY]: settings[TRANSLATION_LEVEL_STORAGE_KEY],
         [PHRASE_MIN_STORAGE_KEY]: settings[PHRASE_MIN_STORAGE_KEY],
         [PHRASE_MAX_STORAGE_KEY]: settings[PHRASE_MAX_STORAGE_KEY],
+        [PHRASE_COVERAGE_STORAGE_KEY]: settings[PHRASE_COVERAGE_STORAGE_KEY],
         [PHRASE_TEMPERATURE_STORAGE_KEY]: settings[PHRASE_TEMPERATURE_STORAGE_KEY],
       });
 
       await chrome.storage.local.set(normalizedSettings);
       setSettings({
         [LANGUAGE_STORAGE_KEY]: normalizedSettings[LANGUAGE_STORAGE_KEY],
+        [TRANSLATION_LEVEL_STORAGE_KEY]: normalizedSettings[TRANSLATION_LEVEL_STORAGE_KEY],
         [PHRASE_MIN_STORAGE_KEY]: String(normalizedSettings[PHRASE_MIN_STORAGE_KEY]),
         [PHRASE_MAX_STORAGE_KEY]: String(normalizedSettings[PHRASE_MAX_STORAGE_KEY]),
+        [PHRASE_COVERAGE_STORAGE_KEY]: String(normalizedSettings[PHRASE_COVERAGE_STORAGE_KEY]),
         [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
           normalizedSettings[PHRASE_TEMPERATURE_STORAGE_KEY]
         ),
@@ -113,6 +137,19 @@ export default function Popup() {
         </select>
       </label>
 
+      <label className="popup__field" htmlFor="translation-level-select">
+        <span>Level</span>
+        <select
+          id="translation-level-select"
+          name={TRANSLATION_LEVEL_STORAGE_KEY}
+          value={settings[TRANSLATION_LEVEL_STORAGE_KEY]}
+          onChange={handleFieldChange}
+        >
+          <option value="beginner">Beginner</option>
+          <option value="elementary">Elementary</option>
+        </select>
+      </label>
+
       <div className="popup__grid">
         <label className="popup__field" htmlFor="phrase-min">
           <span>Min Words</span>
@@ -121,9 +158,10 @@ export default function Popup() {
             name={PHRASE_MIN_STORAGE_KEY}
             type="number"
             min="1"
-            max="10"
+            max="1"
             value={settings[PHRASE_MIN_STORAGE_KEY]}
-            onChange={handleFieldChange}
+            disabled
+            readOnly
           />
         </label>
 
@@ -136,6 +174,19 @@ export default function Popup() {
             min="1"
             max="10"
             value={settings[PHRASE_MAX_STORAGE_KEY]}
+            onChange={handleFieldChange}
+          />
+        </label>
+
+        <label className="popup__field" htmlFor="phrase-coverage">
+          <span>Coverage %</span>
+          <input
+            id="phrase-coverage"
+            name={PHRASE_COVERAGE_STORAGE_KEY}
+            type="number"
+            min="1"
+            max="100"
+            value={settings[PHRASE_COVERAGE_STORAGE_KEY]}
             onChange={handleFieldChange}
           />
         </label>

@@ -1,6 +1,8 @@
 export const LANGUAGE_STORAGE_KEY = "selectedLanguage";
+export const TRANSLATION_LEVEL_STORAGE_KEY = "translationLevel";
 export const PHRASE_MIN_STORAGE_KEY = "phraseMinWords";
 export const PHRASE_MAX_STORAGE_KEY = "phraseMaxWords";
+export const PHRASE_COVERAGE_STORAGE_KEY = "phraseCoveragePercent";
 export const PHRASE_TEMPERATURE_STORAGE_KEY = "phraseLengthTemperature";
 export const GEMMA_MODEL = "gemini-3.1-flash-lite-preview";
 
@@ -25,11 +27,37 @@ export const PREPROMPT_BEGINNER = [
   "If a choice is ambiguous, leave the original word unchanged."
 ].join("\n");
 
-export const DEFAULT_SETTINGS = {
+export const PREPROMPT_ELEMENTARY = [
+  "Translate a slightly broader but still selective subset of the paragraph into the target language.",
+  "Many words must remain in the original language.",
+  "Translate easy elementary-level words, including concrete nouns, simple articles, pronouns, prepositions, and conjunctions.",
+  "Still avoid translating most verbs, adjectives, and adverbs unless they are extremely basic and needed for a short natural phrase.",
+  "If a choice is ambiguous, leave the original word unchanged."
+].join("\n");
+
+export const BEGINNER_SETTINGS = {
   [LANGUAGE_STORAGE_KEY]: "spanish",
+  [TRANSLATION_LEVEL_STORAGE_KEY]: "beginner",
   [PHRASE_MIN_STORAGE_KEY]: 1,
   [PHRASE_MAX_STORAGE_KEY]: 4,
+  [PHRASE_COVERAGE_STORAGE_KEY]: 16,
   [PHRASE_TEMPERATURE_STORAGE_KEY]: 0,
+};
+
+export const ELEMENTARY_SETTINGS = {
+  [LANGUAGE_STORAGE_KEY]: "spanish",
+  [TRANSLATION_LEVEL_STORAGE_KEY]: "elementary",
+  [PHRASE_MIN_STORAGE_KEY]: 1,
+  [PHRASE_MAX_STORAGE_KEY]: 5,
+  [PHRASE_COVERAGE_STORAGE_KEY]: 32,
+  [PHRASE_TEMPERATURE_STORAGE_KEY]: 0.2,
+};
+
+export const DEFAULT_SETTINGS = BEGINNER_SETTINGS;
+
+export const SETTINGS_PRESETS = {
+  beginner: BEGINNER_SETTINGS,
+  elementary: ELEMENTARY_SETTINGS,
 };
 
 export function clampNumber(value, min, max) {
@@ -37,30 +65,36 @@ export function clampNumber(value, min, max) {
 }
 
 export function normalizeSettings(storedValues = {}) {
-  const minWords = clampNumber(
-    Number(storedValues[PHRASE_MIN_STORAGE_KEY] ?? DEFAULT_SETTINGS[PHRASE_MIN_STORAGE_KEY]),
+  const translationLevel =
+    storedValues[TRANSLATION_LEVEL_STORAGE_KEY] === "elementary" ? "elementary" : "beginner";
+  const levelDefaults = SETTINGS_PRESETS[translationLevel];
+  const maxWords = clampNumber(
+    Number(storedValues[PHRASE_MAX_STORAGE_KEY] ?? levelDefaults[PHRASE_MAX_STORAGE_KEY]),
     1,
     10
   );
-  const maxWords = clampNumber(
-    Number(storedValues[PHRASE_MAX_STORAGE_KEY] ?? DEFAULT_SETTINGS[PHRASE_MAX_STORAGE_KEY]),
+  const coveragePercent = clampNumber(
+    Number(
+      storedValues[PHRASE_COVERAGE_STORAGE_KEY] ?? levelDefaults[PHRASE_COVERAGE_STORAGE_KEY]
+    ),
     1,
-    10
+    100
   );
   const temperature = clampNumber(
     Number(
       storedValues[PHRASE_TEMPERATURE_STORAGE_KEY] ??
-        DEFAULT_SETTINGS[PHRASE_TEMPERATURE_STORAGE_KEY]
+        levelDefaults[PHRASE_TEMPERATURE_STORAGE_KEY]
     ),
     0,
     1
   );
 
   return {
-    [LANGUAGE_STORAGE_KEY]:
-      storedValues[LANGUAGE_STORAGE_KEY] ?? DEFAULT_SETTINGS[LANGUAGE_STORAGE_KEY],
-    [PHRASE_MIN_STORAGE_KEY]: Math.min(minWords, maxWords),
-    [PHRASE_MAX_STORAGE_KEY]: Math.max(minWords, maxWords),
+    [LANGUAGE_STORAGE_KEY]: storedValues[LANGUAGE_STORAGE_KEY] ?? levelDefaults[LANGUAGE_STORAGE_KEY],
+    [TRANSLATION_LEVEL_STORAGE_KEY]: translationLevel,
+    [PHRASE_MIN_STORAGE_KEY]: 1,
+    [PHRASE_MAX_STORAGE_KEY]: Math.max(1, maxWords),
+    [PHRASE_COVERAGE_STORAGE_KEY]: coveragePercent,
     [PHRASE_TEMPERATURE_STORAGE_KEY]: temperature,
   };
 }

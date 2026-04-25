@@ -3,6 +3,7 @@ import { LOCAL_GEMMA_API_KEY, SERVER_PORT } from "./local-config.js";
 import {
   GEMMA_MODEL,
   PREPROMPT_BEGINNER,
+  PREPROMPT_ELEMENTARY,
   PREPROMPT_SUFFIX,
   normalizeSettings,
 } from "../src/shared/settings.js";
@@ -54,14 +55,20 @@ function describeLengthBias(temperature) {
   return "Prefer short translated spans over longer ones.";
 }
 
+function getLevelPrompt(translationLevel) {
+  return translationLevel === "elementary" ? PREPROMPT_ELEMENTARY : PREPROMPT_BEGINNER;
+}
+
 function buildTranslationPrompt(targetLanguage, settings) {
+  const translationLevel = settings?.translationLevel ?? "beginner";
   const minWords = settings?.phraseMinWords ?? 1;
   const maxWords = settings?.phraseMaxWords ?? 4;
-  const maxCoveragePercent = Math.max(8, Math.min(20, maxWords * 4));
+  const maxCoveragePercent = settings?.phraseCoveragePercent ?? 16;
 
   return [
     `Partially translate the input into ${targetLanguage}.`,
-    PREPROMPT_BEGINNER,
+    `Translation level: ${translationLevel}.`,
+    getLevelPrompt(translationLevel),
     `Each translated span must be between ${minWords} and ${maxWords} words inclusive.`,
     `Never translate more than ${maxWords} consecutive words in any one span.`,
     `Translate at most about ${maxCoveragePercent}% of the words in the paragraph.`,
@@ -688,8 +695,10 @@ const server = http.createServer(async (request, response) => {
     const targetLanguage = String(body?.targetLanguage ?? "").trim();
     const normalizedSettings = normalizeSettings({
       selectedLanguage: targetLanguage,
+      translationLevel: body?.translationLevel,
       phraseMinWords: body?.phraseMinWords,
       phraseMaxWords: body?.phraseMaxWords,
+      phraseCoveragePercent: body?.phraseCoveragePercent,
       phraseLengthTemperature: body?.phraseLengthTemperature,
     });
 
@@ -699,8 +708,10 @@ const server = http.createServer(async (request, response) => {
       targetLanguage,
       splitTextCount: Array.isArray(splitText) ? splitText.length : null,
       rawTextLength: typeof rawText === "string" ? rawText.length : null,
+      translationLevel: normalizedSettings.translationLevel,
       phraseMinWords: normalizedSettings.phraseMinWords,
       phraseMaxWords: normalizedSettings.phraseMaxWords,
+      phraseCoveragePercent: normalizedSettings.phraseCoveragePercent,
       phraseLengthTemperature: normalizedSettings.phraseLengthTemperature,
     });
 
