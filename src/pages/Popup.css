@@ -1,0 +1,108 @@
+.popup {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 24px 20px;
+    box-sizing: border-box;
+}
+
+.popup img {
+    width: 96px;
+    height: 96px;
+    align-self: center;
+}
+
+.popup__copy {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.popup h1 {
+    margin: 0;
+    font-size: 22px;
+    color: white;
+    font-weight: 700;
+}
+
+.popup p {
+    margin: 0;
+    color: rgba(255, 255, 255, 0.78);
+    line-height: 1.4;
+}
+
+.popup__field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    color: white;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.popup__grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.popup__field input,
+.popup__field select {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.08);
+    color: white;
+    padding: 12px 14px;
+    font: inherit;
+}
+
+.popup__field input[type="range"] {
+    padding: 0;
+}
+
+.popup__field input:focus,
+.popup__field select:focus {
+    outline: 2px solid rgba(255, 255, 255, 0.35);
+    outline-offset: 2px;
+}
+
+.popup__field option {
+    color: black;
+}
+
+.popup__label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.popup__field small {
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.popup__button {
+    border: 0;
+    border-radius: 12px;
+    background: #f65d4e;
+    color: white;
+    padding: 12px 14px;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.popup__button:disabled {
+    opacity: 0.65;
+    cursor: wait;
+}
+
+.popup__status {
+    min-height: 20px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.62);
+}
