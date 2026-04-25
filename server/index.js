@@ -41,35 +41,6 @@ function buildSingleTranslationPrompt(phrase, targetLanguage) {
   ].join("\n");
 }
 
-function extractTextFromResponse(data) {
-  const parts = data?.candidates?.[0]?.content?.parts;
-  if (!Array.isArray(parts)) return "";
-
-  return parts
-    .map((part) => (typeof part?.text === "string" ? part.text : ""))
-    .join("")
-    .trim();
-}
-
-function parseTranslationArray(text, expectedCount) {
-  const normalizedText = text.replace(/^```[\w-]*\s*|\s*```$/gmu, "").trim();
-  const parts = normalizedText
-    .split(TRANSLATION_DELIMITER)
-    .map((item) => item.trim());
-
-  if (parts.length !== expectedCount || parts.some((item) => item.length === 0)) {
-    throw new Error("Unexpected translation payload returned by Gemma.");
-  }
-
-  return parts;
-}
-
-function delay(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function parseRetryDelayMs(retryDelay) {
   if (typeof retryDelay !== "string") return null;
 
@@ -122,122 +93,6 @@ async function readJsonBody(request) {
   return rawBody ? JSON.parse(rawBody) : {};
 }
 
-async function translatePhrases({ phrases, targetLanguage }) {
-  const apiKey = String(LOCAL_GEMMA_API_KEY ?? "").trim();
-  if (!apiKey) {
-    throw new Error("Missing Gemma API key in server/local-config.js.");
-  }
-
-  async function requestGemma(prompt) {
-    console.log("\n[Gemma prompt]");
-    console.log(prompt);
-    console.log("[/Gemma prompt]\n");
-
-    for (let attempt = 1; attempt <= MAX_TRANSLATION_ATTEMPTS; attempt += 1) {
-      const response = await fetch(`${GEMMA_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: prompt,
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.2,
-          },
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorJson = null;
-
-        try {
-          errorJson = JSON.parse(errorText);
-        } catch {
-          errorJson = null;
-        }
-
-        const retryDelayMs = getRetryDelayMs(response.status, errorJson, response.headers);
-        if (response.status === 429 && attempt < MAX_TRANSLATION_ATTEMPTS) {
-          await delay(retryDelayMs ?? FALLBACK_RETRY_DELAY_MS);
-          continue;
-        }
-
-        if (response.status === 429) {
-          throw new RetryableTranslationError(
-            `Gemma request failed (${response.status}): ${errorText}`,
-            retryDelayMs ?? FALLBACK_RETRY_DELAY_MS
-          );
-        }
-
-        throw new Error(`Gemma request failed (${response.status}): ${errorText}`);
-      }
-
-      const responseData = await response.json();
-      const responseText = extractTextFromResponse(responseData);
-      if (!responseText) {
-        throw new Error("Gemma returned an empty response.");
-      }
-
-      console.log("\n[Gemma raw response]");
-      console.log(responseText);
-      console.log("[/Gemma raw response]\n");
-
-      return responseText;
-    }
-
-    throw new Error("Gemma translation failed after retry attempts.");
-  }
-
-  const batchPrompt = buildTranslationPrompt(phrases, targetLanguage);
-  const batchResponseText = await requestGemma(batchPrompt);
-
-  try {
-    return parseTranslationArray(batchResponseText, phrases.length);
-  } catch (error) {
-    console.warn("Batch translation parse failed. Falling back to per-phrase translation.");
-
-    const translations = [];
-    for (const phrase of phrases) {
-      const singlePrompt = buildSingleTranslationPrompt(phrase, targetLanguage);
-      const singleResponseText = await requestGemma(singlePrompt);
-      const cleanedTranslation = singleResponseText
-        .replace(/^```[\w-]*\s*|\s*```$/gmu, "")
-        .trim();
-
-      if (!cleanedTranslation) {
-        throw new Error("Gemma returned an empty translation during fallback.");
-      }
-
-      translations.push(cleanedTranslation);
-    }
-
-    return translations;
-  }
-}
-
-function enqueueTranslation(task) {
-  const queuedTask = translationQueue
-    .catch(() => undefined)
-    .then(async () => {
-      const result = await task();
-      await delay(INTER_REQUEST_DELAY_MS);
-      return result;
-    });
-
-  translationQueue = queuedTask.catch(() => undefined);
-  return queuedTask;
-}
-
 const server = http.createServer(async (request, response) => {
   if (!request.url) {
     sendJson(response, 400, { error: "Missing request URL." });
@@ -266,11 +121,11 @@ const server = http.createServer(async (request, response) => {
 
   try {
     const body = await readJsonBody(request);
-    const phrases = Array.isArray(body?.phrases) ? body.phrases.map((item) => String(item)) : [];
+    const rawText = String(body?.rawText ?? "").trim();
     const targetLanguage = String(body?.targetLanguage ?? "").trim();
 
-    if (phrases.length === 0) {
-      sendJson(response, 400, { error: "phrases must be a non-empty array." });
+    if (rawText.length === 0) {
+      sendJson(response, 400, { error: "rawText is required." });
       return;
     }
 
@@ -279,10 +134,8 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    const translations = await enqueueTranslation(() =>
-      translatePhrases({ phrases, targetLanguage })
-    );
-    sendJson(response, 200, { translations });
+    //Insert translation processing here as a seperate function outside this one.
+    //Return a streaming text response that sends translated text as it is received from the Gemma API.
   } catch (error) {
     console.error("Translation request failed:", error);
     const retryAfterMs =

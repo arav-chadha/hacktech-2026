@@ -1,14 +1,14 @@
 import browser from "webextension-polyfill";
 const BACKEND_TRANSLATE_ENDPOINT = "http://127.0.0.1:8787/translate";
 
-async function translatePhrases({ phrases, targetLanguage }) {
+async function translatePhrases({ rawText, targetLanguage }) {
   const response = await fetch(BACKEND_TRANSLATE_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      phrases,
+      rawText,
       targetLanguage,
     }),
   });

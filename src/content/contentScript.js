@@ -218,42 +218,44 @@ function getParagraphSelection(node) {
 async function translateSelections(selections, settings) {
     if (selections.length === 0) return;
 
-    for (let offset = 0; offset < selections.length; offset += TRANSLATION_BATCH_SIZE) {
-        const batch = selections.slice(offset, offset + TRANSLATION_BATCH_SIZE);
+    for (const selection of selections) {
+        translateSelection(selection, settings);
+    }
+}
 
-        let translatedPhrases;
-        try {
-            translatedPhrases = await chrome.runtime.sendMessage({
-                type: "TRANSLATE_PHRASES",
-                payload: {
-                    phrases: batch.map((selection) => selection.rawText),
-                    targetLanguage: settings.selectedLanguage,
-                },
-            });
-        } catch (error) {
-            console.error("Failed to translate phrases:", error);
-            continue;
-        }
+async function translateSelection(selection, settings) {
+    let translatedPhrases;
+    try {
+        translatedPhrases = await chrome.runtime.sendMessage({
+            type: "TRANSLATE_PHRASES",
+            payload: {
+                rawText: selection.rawText,
+                targetLanguage: settings.selectedLanguage,
+            },
+        });
+    } catch (error) {
+        console.error("Failed to translate phrases:", error);
+        continue;
+    }
 
-        if (translatedPhrases?.error) {
-            console.error("Gemma translation error:", translatedPhrases.error);
-            continue;
-        }
+    if (translatedPhrases?.error) {
+        console.error("Gemma translation error:", translatedPhrases.error);
+        continue;
+    }
 
-        const translations = translatedPhrases?.translations;
-        if (!Array.isArray(translations) || translations.length !== batch.length) {
-            console.error("Received an invalid translation batch from the background script.");
-            continue;
-        }
+    const translations = translatedPhrases?.translations;
+    if (!Array.isArray(translations) || translations.length !== batch.length) {
+        console.error("Received an invalid translation batch from the background script.");
+        continue;
+    }
 
-        for (let index = 0; index < batch.length; index += 1) {
-            const selection = batch[index];
-            if (!selection.node.isConnected) continue;
+    for (let index = 0; index < batch.length; index += 1) {
+        const selection = batch[index];
+        if (!selection.node.isConnected) continue;
 
-            selection.node.setAttribute(PROCESSED_ATTR, "true");
-            const replacement = createReplacementNode(translations[index]);
-            selection.node.replaceChildren(replacement);
-        }
+        selection.node.setAttribute(PROCESSED_ATTR, "true");
+        const replacement = createReplacementNode(translations[index]);
+        selection.node.replaceChildren(replacement);
     }
 }
 
