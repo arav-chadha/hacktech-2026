@@ -15,6 +15,7 @@
         "client_id": "1005130732109-ii39qvpmqhhkqmaf80fca3plm3hgcgbg.apps.googleusercontent.com",
         "scopes": ["openid", "email", "profile"]
   },
+  "key": "bfcebmkbcpflijkodgabdijoomonmkdo",
   "permissions": [
     "scripting",
     "storage",
