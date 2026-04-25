@@ -1,7 +1,7 @@
 import browser from "webextension-polyfill";
 const BACKEND_TRANSLATE_ENDPOINT = "http://127.0.0.1:8787/translate";
 
-async function translatePhrases({ rawText, targetLanguage }) {
+async function translateParagraph({ rawText, splitText, targetLanguage }) {
   const response = await fetch(BACKEND_TRANSLATE_ENDPOINT, {
     method: "POST",
     headers: {
@@ -9,6 +9,7 @@ async function translatePhrases({ rawText, targetLanguage }) {
     },
     body: JSON.stringify({
       rawText,
+      splitText,
       targetLanguage,
     }),
   });
@@ -19,11 +20,11 @@ async function translatePhrases({ rawText, targetLanguage }) {
   }
 
   const responseData = await response.json();
-  if (!Array.isArray(responseData?.translations)) {
+  if (!responseData?.translation || typeof responseData.translation.html !== "string") {
     throw new Error(responseData?.error || "Backend returned an invalid response.");
   }
 
-  return responseData.translations.map((item) => String(item));
+  return responseData.translation;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -31,8 +32,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return undefined;
   }
 
-  translatePhrases(message.payload)
-    .then((translations) => sendResponse({ translations }))
+  translateParagraph(message.payload)
+    .then((translation) => sendResponse({ translation }))
     .catch((error) => {
       console.error("Gemma translation request failed:", error);
       sendResponse({ error: error.message });

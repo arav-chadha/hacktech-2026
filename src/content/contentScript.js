@@ -1,4 +1,8 @@
 import { DEFAULT_SETTINGS, LANGUAGE_STORAGE_KEY } from "../shared/settings";
+import {
+    buildRawTextFromSplitText,
+    normalizeWhitespace,
+} from "../shared/translationMarkup";
 
 const processedNodes = new WeakSet();
 const PROCESSED_ATTR = "data-language-extension-processed";
@@ -85,15 +89,6 @@ function getWordMatches(text) {
     return Array.from(text.matchAll(WORD_PATTERN));
 }
 
-function normalizeWhitespace(text) {
-    return text.replace(/\s+/g, " ").trim();
-}
-
-function splitPlainText(text) {
-    const normalizedText = normalizeWhitespace(text);
-    return normalizedText ? normalizedText.split(" ") : [];
-}
-
 function buildStartTag(element) {
     const tagName = element.tagName.toLowerCase();
     const attributes = Array.from(element.attributes)
@@ -114,7 +109,7 @@ function serializeContentNode(node) {
 
         return {
             rawText,
-            splitText: splitPlainText(rawText),
+            splitText: [rawText],
         };
     }
 
@@ -155,18 +150,16 @@ function serializeContentNode(node) {
 
 function serializeParagraph(paragraph) {
     const splitText = [];
-    const rawParts = [];
 
     for (const child of paragraph.childNodes) {
         const serializedChild = serializeContentNode(child);
         if (!serializedChild) continue;
 
         splitText.push(...serializedChild.splitText);
-        rawParts.push(serializedChild.rawText);
     }
 
     return {
-        rawText: normalizeWhitespace(rawParts.join(" ")),
+        rawText: buildRawTextFromSplitText(splitText),
         splitText,
     };
 }
@@ -185,17 +178,9 @@ function isValidParagraphNode(node) {
     return true;
 }
 
-function createReplacementNode(replacementText) {
-    const wrapper = document.createElement("span");
-    wrapper.setAttribute(PROCESSED_ATTR, "true");
-
-    const highlightedPhrase = document.createElement("span");
-    highlightedPhrase.textContent = replacementText;
-    highlightedPhrase.style.setProperty("color", "red", "important");
-    highlightedPhrase.setAttribute(PROCESSED_ATTR, "true");
-    wrapper.appendChild(highlightedPhrase);
-
-    return wrapper;
+function injectTranslatedHtml(paragraph, translatedHtml) {
+    paragraph.setAttribute(PROCESSED_ATTR, "true");
+    paragraph.innerHTML = translatedHtml;
 }
 
 function getParagraphSelection(node) {
@@ -224,39 +209,37 @@ async function translateSelections(selections, settings) {
 }
 
 async function translateSelection(selection, settings) {
-    let translatedPhrases;
+    let translationResult;
     try {
-        translatedPhrases = await chrome.runtime.sendMessage({
+        translationResult = await chrome.runtime.sendMessage({
             type: "TRANSLATE_PHRASES",
             payload: {
                 rawText: selection.rawText,
+                splitText: selection.splitText,
                 targetLanguage: settings.selectedLanguage,
             },
         });
     } catch (error) {
         console.error("Failed to translate phrases:", error);
-        continue;
+        return;
     }
 
-    if (translatedPhrases?.error) {
-        console.error("Gemma translation error:", translatedPhrases.error);
-        continue;
+    if (translationResult?.error) {
+        console.error("Gemma translation error:", translationResult.error);
+        return;
     }
 
-    const translations = translatedPhrases?.translations;
-    if (!Array.isArray(translations) || translations.length !== batch.length) {
-        console.error("Received an invalid translation batch from the background script.");
-        continue;
+    const translatedHtml = String(translationResult?.translation?.html ?? "").trim();
+    if (!translatedHtml) {
+        console.error("Received an invalid translation payload from the background script.");
+        return;
     }
 
-    for (let index = 0; index < batch.length; index += 1) {
-        const selection = batch[index];
-        if (!selection.node.isConnected) continue;
-
-        selection.node.setAttribute(PROCESSED_ATTR, "true");
-        const replacement = createReplacementNode(translations[index]);
-        selection.node.replaceChildren(replacement);
+    if (!selection.node.isConnected) {
+        return;
     }
+
+    injectTranslatedHtml(selection.node, translatedHtml);
 }
 
 async function processParagraphList(nodes, settings) {

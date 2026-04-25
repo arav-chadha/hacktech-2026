@@ -1,13 +1,20 @@
 import http from "node:http";
 import { LOCAL_GEMMA_API_KEY, SERVER_PORT } from "./local-config.js";
 import { GEMMA_MODEL } from "../src/shared/settings.js";
+import {
+  buildMarkerizedTextFromSplitText,
+  buildPlainTextFromParsedMarkers,
+  buildRawTextFromSplitText,
+  normalizeWhitespace,
+  parseTranslatedMarkerizedText,
+  reconstructHtmlFromParsedMarkers,
+} from "../src/shared/translationMarkup.js";
 
 const GEMMA_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMMA_MODEL}:generateContent`;
 const SERVER_HOST = "127.0.0.1";
 const MAX_TRANSLATION_ATTEMPTS = 3;
 const FALLBACK_RETRY_DELAY_MS = 60_000;
-const INTER_REQUEST_DELAY_MS = 2_500;
-const TRANSLATION_DELIMITER = "\n<|LANG_EXT_TR|>\n";
+const INTER_REQUEST_DELAY_MS = 1_500;
 let translationQueue = Promise.resolve();
 
 function sendJson(response, statusCode, payload) {
@@ -20,32 +27,53 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload));
 }
 
-function buildTranslationPrompt(phrases, targetLanguage) {
-  return [
-    `Translate each input phrase into ${targetLanguage}`,
-    "Preserve meaning and punctuation",
-    `Return only translated strings in same order as input, separated by delimiter: ${TRANSLATION_DELIMITER.trim()}`,
-    "Do not number outputs",
-    "Do not wrap response in markdown or code fences",
-    `Input phrases: ${JSON.stringify(phrases)}`,
-  ].join("\n");
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
-function buildSingleTranslationPrompt(phrase, targetLanguage) {
+function enqueueTranslation(task) {
+  const queuedTask = translationQueue.catch(() => {}).then(task);
+  translationQueue = queuedTask.catch(() => {}).then(() => delay(INTER_REQUEST_DELAY_MS));
+  return queuedTask;
+}
+
+function buildTranslationPrompt(markerizedText, targetLanguage) {
+
   return [
-    `Translate this phrase into ${targetLanguage}`,
-    "Preserve meaning and punctuation",
-    "Return only translation",
-    "Do not wrap response in markdown or code fences",
-    `Input phrase: ${JSON.stringify(phrase)}`,
+    `Rewrite input in ${targetLanguage}`,
+    "Translate naturally, especially text in markers",
+    "Do not surround text w/ * \' or \"",
+    "Preserve markers exactly, both open and closed forms",
+    "Dont: add remove rename duplicate reorder marker bounds",
+    "Keep marker structure identical to input",
+    "Return only translated paragraph w/ markers",
+    "Do not return markdown code fences notes text or alternatives",
+    `Input: ${JSON.stringify(markerizedText)}`
+    ].join("\n")
+
+  return [
+    `Translate the paragraph into ${targetLanguage}.`,
+    "Preserve every marker exactly as written, including both opening and closing forms.",
+    "Do not add, remove, rename, duplicate, or reorder marker boundaries.",
+    "Keep the same marker nesting structure as the input.",
+    "Translate naturally, including text inside markers.",
+    "Return only the translated paragraph with markers preserved.",
+    "Do not output markdown, explanations, code fences, notes, or alternatives.",
+    `Input: ${JSON.stringify(markerizedText)}`,
   ].join("\n");
 }
 
 function parseRetryDelayMs(retryDelay) {
-  if (typeof retryDelay !== "string") return null;
+  if (typeof retryDelay !== "string") {
+    return null;
+  }
 
   const seconds = Number.parseFloat(retryDelay.replace(/s$/, ""));
-  if (!Number.isFinite(seconds)) return null;
+  if (!Number.isFinite(seconds)) {
+    return null;
+  }
 
   return Math.ceil(seconds * 1000);
 }
@@ -74,11 +102,26 @@ function getRetryDelayMs(statusCode, responseJson, responseHeaders) {
   return null;
 }
 
+function extractGemmaText(responseJson) {
+  return normalizeWhitespace(
+    responseJson?.candidates?.[0]?.content?.parts
+      ?.map((part) => String(part?.text ?? ""))
+      .join("")
+  );
+}
+
 class RetryableTranslationError extends Error {
   constructor(message, retryDelayMs) {
     super(message);
     this.name = "RetryableTranslationError";
     this.retryDelayMs = retryDelayMs;
+  }
+}
+
+class MarkerValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "MarkerValidationError";
   }
 }
 
@@ -91,6 +134,95 @@ async function readJsonBody(request) {
 
   const rawBody = Buffer.concat(chunks).toString("utf8");
   return rawBody ? JSON.parse(rawBody) : {};
+}
+
+async function requestGemma(prompt) {
+  const response = await fetch(`${GEMMA_ENDPOINT}?key=${encodeURIComponent(LOCAL_GEMMA_API_KEY)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          parts: [{ text: prompt }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+      },
+    }),
+  });
+
+  const responseJson = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const retryDelayMs = getRetryDelayMs(response.status, responseJson, response.headers);
+    const message =
+      responseJson?.error?.message ||
+      `Gemma request failed with status ${response.status}.`;
+
+    if (retryDelayMs) {
+      throw new RetryableTranslationError(message, retryDelayMs);
+    }
+
+    throw new Error(message);
+  }
+
+  const translatedText = extractGemmaText(responseJson);
+  if (!translatedText) {
+    throw new Error("Gemma returned an empty translation.");
+  }
+
+  return translatedText;
+}
+
+async function requestGemmaWithRetries(prompt) {
+  let attempt = 0;
+  let lastError = null;
+
+  while (attempt < MAX_TRANSLATION_ATTEMPTS) {
+    attempt += 1;
+
+    try {
+      return await requestGemma(prompt);
+    } catch (error) {
+      lastError = error;
+
+      if (!(error instanceof RetryableTranslationError) || attempt >= MAX_TRANSLATION_ATTEMPTS) {
+        break;
+      }
+
+      await delay(error.retryDelayMs);
+    }
+  }
+
+  throw lastError ?? new Error("Translation failed.");
+}
+
+async function translateParagraph({ splitText, targetLanguage }) {
+  const { markerizedText, segments } = buildMarkerizedTextFromSplitText(splitText);
+  if (!markerizedText) {
+    throw new Error("Paragraph did not contain any translatable text.");
+  }
+
+  const prompt = buildTranslationPrompt(markerizedText, targetLanguage);
+  const translatedMarkerizedText = await enqueueTranslation(() =>
+    requestGemmaWithRetries(prompt)
+  );
+
+  const parsedTranslation = parseTranslatedMarkerizedText(
+    translatedMarkerizedText,
+    segments
+  );
+  if (!parsedTranslation.ok) {
+    throw new MarkerValidationError(parsedTranslation.error);
+  }
+
+  return {
+    html: reconstructHtmlFromParsedMarkers(parsedTranslation.tree, segments),
+    text: buildPlainTextFromParsedMarkers(parsedTranslation.tree),
+    markerizedText: parsedTranslation.normalizedText,
+  };
 }
 
 const server = http.createServer(async (request, response) => {
@@ -121,11 +253,11 @@ const server = http.createServer(async (request, response) => {
 
   try {
     const body = await readJsonBody(request);
-    const rawText = String(body?.rawText ?? "").trim();
+    const splitText = body?.splitText;
     const targetLanguage = String(body?.targetLanguage ?? "").trim();
 
-    if (rawText.length === 0) {
-      sendJson(response, 400, { error: "rawText is required." });
+    if (!Array.isArray(splitText)) {
+      sendJson(response, 400, { error: "splitText is required." });
       return;
     }
 
@@ -134,10 +266,31 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    //Insert translation processing here as a seperate function outside this one.
-    //Return a streaming text response that sends translated text as it is received from the Gemma API.
+    const sourceText = buildRawTextFromSplitText(splitText);
+    if (!sourceText) {
+      sendJson(response, 400, { error: "splitText did not contain any text." });
+      return;
+    }
+
+    const translation = await translateParagraph({
+      splitText,
+      targetLanguage,
+    });
+
+    sendJson(response, 200, {
+      translation,
+      sourceText,
+    });
   } catch (error) {
     console.error("Translation request failed:", error);
+
+    if (error instanceof MarkerValidationError) {
+      sendJson(response, 422, {
+        error: `Model returned invalid marker output: ${error.message}`,
+      });
+      return;
+    }
+
     const retryAfterMs =
       error instanceof RetryableTranslationError ? error.retryDelayMs : null;
     sendJson(response, 500, {
