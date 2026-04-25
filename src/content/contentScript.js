@@ -238,8 +238,6 @@ async function translateSelection(selection, settings) {
             resolve();
         }
 
-        clearParagraphForStreaming(selection.node);
-
         port.onMessage.addListener((message) => {
             if (message?.type === "error") {
                 console.error("Gemma translation error:", message.error);
@@ -264,6 +262,9 @@ async function translateSelection(selection, settings) {
                 return;
             }
 
+            if (!hasRenderedChunk) {
+                // clearParagraphForStreaming(selection.node);
+            }
             hasRenderedChunk = true;
             injectTranslatedHtml(selection.node, translatedHtml);
 
