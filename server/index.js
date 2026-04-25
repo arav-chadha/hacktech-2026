@@ -90,6 +90,145 @@ function joinTokenText(tokens, start, end) {
   return tokens.slice(start, end + 1).map((token) => token.text).join(" ");
 }
 
+function getMatchedTokenPairs(sourceTokens, targetTokens) {
+  const sourceValues = sourceTokens.map((token) => canonicalizeAlignedText(token.text));
+  const targetValues = targetTokens.map((token) => canonicalizeAlignedText(token.text));
+  const lcsTable = Array.from({ length: sourceValues.length + 1 }, () =>
+    Array(targetValues.length + 1).fill(0)
+  );
+
+  for (let sourceIndex = sourceValues.length - 1; sourceIndex >= 0; sourceIndex -= 1) {
+    for (let targetIndex = targetValues.length - 1; targetIndex >= 0; targetIndex -= 1) {
+      if (sourceValues[sourceIndex] && sourceValues[sourceIndex] === targetValues[targetIndex]) {
+        lcsTable[sourceIndex][targetIndex] = lcsTable[sourceIndex + 1][targetIndex + 1] + 1;
+      } else {
+        lcsTable[sourceIndex][targetIndex] = Math.max(
+          lcsTable[sourceIndex + 1][targetIndex],
+          lcsTable[sourceIndex][targetIndex + 1]
+        );
+      }
+    }
+  }
+
+  const matches = [];
+  let sourceIndex = 0;
+  let targetIndex = 0;
+  while (sourceIndex < sourceValues.length && targetIndex < targetValues.length) {
+    if (sourceValues[sourceIndex] && sourceValues[sourceIndex] === targetValues[targetIndex]) {
+      matches.push({ sourceIndex, targetIndex });
+      sourceIndex += 1;
+      targetIndex += 1;
+      continue;
+    }
+
+    if (lcsTable[sourceIndex + 1][targetIndex] >= lcsTable[sourceIndex][targetIndex + 1]) {
+      sourceIndex += 1;
+    } else {
+      targetIndex += 1;
+    }
+  }
+
+  return matches;
+}
+
+function buildAlignmentRecord(id, sourceTokens, targetTokens, sourceStart, sourceEnd, targetStart, targetEnd) {
+  if (
+    sourceStart > sourceEnd ||
+    targetStart > targetEnd ||
+    sourceStart < 0 ||
+    targetStart < 0 ||
+    sourceEnd >= sourceTokens.length ||
+    targetEnd >= targetTokens.length
+  ) {
+    return null;
+  }
+
+  const sourceText = joinTokenText(sourceTokens, sourceStart, sourceEnd);
+  const targetText = joinTokenText(targetTokens, targetStart, targetEnd);
+  if (!sourceText || !targetText) {
+    return null;
+  }
+
+  if (canonicalizeAlignedText(sourceText) === canonicalizeAlignedText(targetText)) {
+    return null;
+  }
+
+  return {
+    id,
+    sourceStart,
+    sourceEnd,
+    targetStart,
+    targetEnd,
+    sourceText,
+    targetText,
+  };
+}
+
+function buildDeterministicAlignments(sourceTokens, targetTokens) {
+  const matches = getMatchedTokenPairs(sourceTokens, targetTokens);
+  const alignments = [];
+  let nextAlignmentId = 1;
+  let previousSourceIndex = -1;
+  let previousTargetIndex = -1;
+
+  for (const match of [...matches, { sourceIndex: sourceTokens.length, targetIndex: targetTokens.length }]) {
+    const sourceStart = previousSourceIndex + 1;
+    const sourceEnd = match.sourceIndex - 1;
+    const targetStart = previousTargetIndex + 1;
+    const targetEnd = match.targetIndex - 1;
+    const sourceCount = sourceEnd - sourceStart + 1;
+    const targetCount = targetEnd - targetStart + 1;
+
+    if (sourceCount > 0 && targetCount > 0) {
+      if (sourceCount === targetCount) {
+        for (let offset = 0; offset < sourceCount; offset += 1) {
+          const alignment = buildAlignmentRecord(
+            `alignment-${nextAlignmentId}`,
+            sourceTokens,
+            targetTokens,
+            sourceStart + offset,
+            sourceStart + offset,
+            targetStart + offset,
+            targetStart + offset
+          );
+          if (alignment) {
+            alignments.push(alignment);
+            nextAlignmentId += 1;
+          }
+        }
+      } else {
+        const alignment = buildAlignmentRecord(
+          `alignment-${nextAlignmentId}`,
+          sourceTokens,
+          targetTokens,
+          sourceStart,
+          sourceEnd,
+          targetStart,
+          targetEnd
+        );
+        if (alignment) {
+          alignments.push(alignment);
+          nextAlignmentId += 1;
+        }
+      }
+    }
+
+    previousSourceIndex = match.sourceIndex;
+    previousTargetIndex = match.targetIndex;
+  }
+
+  return alignments;
+}
+
+function canonicalizeAlignedText(text) {
+  return String(text ?? "")
+    .normalize("NFC")
+    .replace(/[’']/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+}
+
 class RetryableTranslationError extends Error {
   constructor(message, retryDelayMs) {
     super(message);
@@ -155,7 +294,13 @@ function parseJsonResponse(text) {
   }
 }
 
-function normalizeAlignmentEntry(entry, index, sourceTokens, targetTokens, usedTargetIndexes) {
+function normalizeAlignmentEntry(
+  entry,
+  index,
+  sourceTokens,
+  targetTokens,
+  usedTargetIndexes
+) {
   const sourceStart = Number(entry?.sourceStart);
   const sourceEnd = Number(entry?.sourceEnd);
   const targetStart = Number(entry?.targetStart);
@@ -181,6 +326,13 @@ function normalizeAlignmentEntry(entry, index, sourceTokens, targetTokens, usedT
     return null;
   }
 
+  const sourceText = joinTokenText(sourceTokens, sourceStart, sourceEnd);
+  const targetText = joinTokenText(targetTokens, targetStart, targetEnd);
+
+  if (canonicalizeAlignedText(sourceText) === canonicalizeAlignedText(targetText)) {
+    return null;
+  }
+
   for (let tokenIndex = targetStart; tokenIndex <= targetEnd; tokenIndex += 1) {
     if (usedTargetIndexes.has(tokenIndex)) {
       return null;
@@ -197,8 +349,8 @@ function normalizeAlignmentEntry(entry, index, sourceTokens, targetTokens, usedT
     sourceEnd,
     targetStart,
     targetEnd,
-    sourceText: joinTokenText(sourceTokens, sourceStart, sourceEnd),
-    targetText: joinTokenText(targetTokens, targetStart, targetEnd),
+    sourceText,
+    targetText,
   };
 }
 
@@ -293,30 +445,14 @@ async function buildTranslationAlignments({ sourceText, translatedText, targetLa
     return [];
   }
 
-  const prompt = buildAlignmentPrompt(targetLanguage);
-  const payload = JSON.stringify({
-    sourceText,
-    translatedText,
-    sourceTokens: sourceTokens.map((token) => token.text),
-    targetTokens: targetTokens.map((token) => token.text),
-  });
-
   logServerEvent("alignment-start", {
     targetLanguage,
     sourceTokenCount: sourceTokens.length,
     targetTokenCount: targetTokens.length,
+    strategy: "deterministic-changed-runs",
   });
 
-  const responseText = await requestGemmaJsonWithRetries(prompt, payload);
-  const responseJson = parseJsonResponse(responseText);
-  const rawAlignments = Array.isArray(responseJson?.alignments) ? responseJson.alignments : [];
-  const usedTargetIndexes = new Set();
-
-  const normalizedAlignments = rawAlignments
-    .map((entry, index) =>
-      normalizeAlignmentEntry(entry, index, sourceTokens, targetTokens, usedTargetIndexes)
-    )
-    .filter(Boolean);
+  const normalizedAlignments = buildDeterministicAlignments(sourceTokens, targetTokens);
 
   logServerEvent("alignment-success", {
     targetLanguage,
