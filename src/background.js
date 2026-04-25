@@ -41,7 +41,7 @@ async function sendDebugLog(payload) {
   }
 }
 
-browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "DEBUG_LOG") {
     void sendDebugLog(message.payload);
     sendResponse({ ok: true });
@@ -62,6 +62,6 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return undefined;
 });
 
-browser.runtime.onInstalled.addListener((details) => {
-  console.log("Extension installed:", details);
+chrome.runtime.onInstalled.addListener((details) => {
+  chrome.action.openPopup();
 });

@@ -46,6 +46,28 @@ const EXCLUDED_CONTAINER_SELECTOR = [
     ".reference",
 ].join(", ");
 
+let userEmail = null;
+
+chrome.storage.local.get("userEmail", (data) => {
+  console.log("Fetching email");
+  const email = data.userEmail;
+
+  if (email) {
+    console.log("User email:", email);
+  } else {
+    console.log("No user signed in");
+  }
+  userEmail = email;
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.userEmail) {
+    const newEmail = changes.userEmail.newValue;
+    console.log("Updated email:", newEmail);
+    userEmail = newEmail;
+  }
+});
+
 function scoreProcessingRootCandidate(element) {
     if (!element || !(element instanceof HTMLElement)) return -Infinity;
     if (element.matches(EXCLUDED_CONTAINER_SELECTOR)) return -Infinity;
@@ -200,7 +222,7 @@ function createSelectionBatches(selections) {
 async function requestTranslations(batch, settings) {
     let translatedPhrases;
     try {
-        translatedPhrases = await browser.runtime.sendMessage({
+        translatedPhrases = await chrome.runtime.sendMessage({
             type: "TRANSLATE_PHRASES",
             payload: {
                 phrases: batch.map((selection) => selection.phrase),
@@ -340,7 +362,7 @@ function getProcessingRoot() {
 
 async function loadSettings() {
     try {
-        const storedValues = await browser.storage.local.get(Object.keys(DEFAULT_SETTINGS));
+        const storedValues = await chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS));
         const normalized = normalizeSettings(storedValues);
         return {
             selectedLanguage: normalized.selectedLanguage,
@@ -372,6 +394,19 @@ async function init() {
 
 function observeDOM(processingRoot, settings) {
     const observer = new MutationObserver((mutations) => {
+        if (userEmail === null) {
+            chrome.storage.local.get("userEmail", (data) => {
+            console.log("Fetching email");
+            const email = data.userEmail;
+
+            if (email) {
+                console.log("User email:", email);
+            } else {
+                console.log("No user signed in");
+            }
+            userEmail = email;
+            });
+        }
         for (const mutation of mutations) {
             if (mutation.type === "childList") {
                 mutation.addedNodes.forEach((node) => {
