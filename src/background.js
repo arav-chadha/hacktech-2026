@@ -26,7 +26,7 @@ async function translatePhrases({ phrases, targetLanguage }) {
   return responseData.translations.map((item) => String(item));
 }
 
-browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "TRANSLATE_PHRASES") {
     return undefined;
   }
@@ -41,6 +41,6 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-browser.runtime.onInstalled.addListener((details) => {
-  console.log("Extension installed:", details);
+chrome.runtime.onInstalled.addListener((details) => {
+  chrome.action.openPopup();
 });

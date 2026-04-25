@@ -1,6 +1,5 @@
 {
   "{{chrome}}.manifest_version": 3,
-  "{{firefox}}.manifest_version": 2,
   "manifest_version": 3,
   "name": "Text Processor Extension",
   "version": "1.0",
@@ -12,31 +11,26 @@
     "96": "icon/96.png",
     "128": "icon/128.png"
   },
-  "{{chrome}}.action": {
-    "default_popup": "src/popup.html",
-    "default_title": "Language Extension",
-    "default_icon": {
-      "16": "icon/16.png",
-      "32": "icon/32.png",
-      "48": "icon/48.png",
-      "128": "icon/128.png"
-    }
-  },
-  "{{firefox}}.browser_action": {
-    "default_popup": "src/popup.html",
-    "default_title": "Language Extension",
-    "default_icon": {
-      "16": "icon/16.png",
-      "32": "icon/32.png",
-      "48": "icon/48.png",
-      "128": "icon/128.png"
-    }
+  "oauth2": {
+        "client_id": "1005130732109-ii39qvpmqhhkqmaf80fca3plm3hgcgbg.apps.googleusercontent.com",
+        "scopes": ["openid", "email", "profile"]
   },
   "permissions": [
     "scripting",
     "storage",
+    "identity",
     "tabs"
   ],
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Language Extension",
+    "default_icon": {
+      "16": "icon/16.png",
+      "32": "icon/32.png",
+      "48": "icon/48.png",
+      "128": "icon/128.png"
+    }
+  },
   "host_permissions": [
     "<all_urls>",
     "http://127.0.0.1:8787/*"

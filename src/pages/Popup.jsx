@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useAuth } from "../useAuth";
 import browser from "webextension-polyfill";
 import "./Popup.css";
 import {
@@ -21,11 +22,12 @@ export default function Popup() {
   });
   const [status, setStatus] = useState("Loading settings...");
   const [isSaving, setIsSaving] = useState(false);
+  const {email, loading, error, signIn, logout} = useAuth();
 
   useEffect(() => {
     async function loadSettings() {
       try {
-        const storedValues = await browser.storage.local.get(Object.keys(DEFAULT_SETTINGS));
+        const storedValues = await chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS));
         const normalizedSettings = normalizeSettings(storedValues);
         setSettings({
           [LANGUAGE_STORAGE_KEY]: normalizedSettings[LANGUAGE_STORAGE_KEY],
@@ -65,7 +67,7 @@ export default function Popup() {
         [PHRASE_TEMPERATURE_STORAGE_KEY]: settings[PHRASE_TEMPERATURE_STORAGE_KEY],
       });
 
-      await browser.storage.local.set(normalizedSettings);
+      await chrome.storage.local.set(normalizedSettings);
       setSettings({
         [LANGUAGE_STORAGE_KEY]: normalizedSettings[LANGUAGE_STORAGE_KEY],
         [PHRASE_MIN_STORAGE_KEY]: String(normalizedSettings[PHRASE_MIN_STORAGE_KEY]),
@@ -76,9 +78,9 @@ export default function Popup() {
       });
       setStatus("Saved. Reloading the current page...");
 
-      const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (activeTab?.id !== undefined) {
-        await browser.tabs.reload(activeTab.id);
+        await chrome.tabs.reload(activeTab.id);
       } else {
         setStatus("Saved settings, but couldn't find the active tab to reload.");
       }
