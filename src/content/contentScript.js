@@ -1,5 +1,5 @@
 import browser from "webextension-polyfill";
-import { DEFAULT_SETTINGS, normalizeSettings } from "../shared/settings";
+import { DEFAULT_SETTINGS, LANGUAGE_STORAGE_KEY } from "../shared/settings";
 
 const processedNodes = new WeakSet();
 const PROCESSED_ATTR = "data-language-extension-processed";
@@ -66,6 +66,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 function scoreProcessingRootCandidate(element) {
+    console.log("Scoring candidate:", element);
     if (!element || !(element instanceof HTMLElement)) return -Infinity;
     if (element.matches(EXCLUDED_CONTAINER_SELECTOR)) return -Infinity;
 
@@ -101,43 +102,9 @@ function getWordMatches(text) {
     return Array.from(text.matchAll(WORD_PATTERN));
 }
 
-function choosePhraseLength(minWords, maxWords, temperature) {
-    const lengths = [];
-    const weights = [];
-
-    for (let length = minWords; length <= maxWords; length += 1) {
-        const normalizedPosition =
-            maxWords === minWords ? 1 : (length - minWords) / (maxWords - minWords);
-        const weight =
-            (1 - temperature) * (1 - normalizedPosition) + temperature * normalizedPosition + 0.1;
-
-        lengths.push(length);
-        weights.push(weight);
-    }
-
-    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
-    let target = Math.random() * totalWeight;
-
-    for (let index = 0; index < lengths.length; index += 1) {
-        target -= weights[index];
-        if (target <= 0) {
-            return lengths[index];
-        }
-    }
-
-    return lengths[lengths.length - 1];
-}
-
-function createReplacementNode(text, phraseStart, phraseEnd, replacementText) {
+function createReplacementNode(replacementText) {
     const wrapper = document.createElement("span");
     wrapper.setAttribute(PROCESSED_ATTR, "true");
-
-    const prefix = text.slice(0, phraseStart);
-    const suffix = text.slice(phraseEnd);
-
-    if (prefix) {
-        wrapper.appendChild(document.createTextNode(prefix));
-    }
 
     const highlightedPhrase = document.createElement("span");
     highlightedPhrase.textContent = replacementText;
@@ -145,14 +112,10 @@ function createReplacementNode(text, phraseStart, phraseEnd, replacementText) {
     highlightedPhrase.setAttribute(PROCESSED_ATTR, "true");
     wrapper.appendChild(highlightedPhrase);
 
-    if (suffix) {
-        wrapper.appendChild(document.createTextNode(suffix));
-    }
-
     return wrapper;
 }
 
-function getPhraseSelection(node, settings) {
+function getPhraseSelection(node) {
     if (!isValidTextNode(node)) return;
     if (processedNodes.has(node)) return;
 
@@ -162,25 +125,9 @@ function getPhraseSelection(node, settings) {
     const wordMatches = getWordMatches(text);
     if (wordMatches.length === 0) return;
 
-    const minWords = Math.max(1, Math.min(settings.phraseMinWords, wordMatches.length));
-    const maxWords = Math.max(minWords, Math.min(settings.phraseMaxWords, wordMatches.length));
-    const phraseLength = choosePhraseLength(
-        minWords,
-        maxWords,
-        settings.phraseLengthTemperature
-    );
-    const maxStartIndex = wordMatches.length - phraseLength;
-    const startIndex = Math.floor(Math.random() * (maxStartIndex + 1));
-    const phraseStart = wordMatches[startIndex].index;
-    const lastWord = wordMatches[startIndex + phraseLength - 1];
-    const phraseEnd = lastWord.index + lastWord[0].length;
-
     return {
         node,
         text,
-        phraseStart,
-        phraseEnd,
-        phrase: text.slice(phraseStart, phraseEnd),
     };
 }
 
@@ -195,7 +142,7 @@ async function translateSelections(selections, settings) {
             translatedPhrases = await chrome.runtime.sendMessage({
                 type: "TRANSLATE_PHRASES",
                 payload: {
-                    phrases: batch.map((selection) => selection.phrase),
+                    phrases: batch.map((selection) => selection.text),
                     targetLanguage: settings.selectedLanguage,
                 },
             });
@@ -219,12 +166,7 @@ async function translateSelections(selections, settings) {
             const selection = batch[index];
             if (!selection.node.isConnected) continue;
 
-            const replacement = createReplacementNode(
-                selection.text,
-                selection.phraseStart,
-                selection.phraseEnd,
-                translations[index]
-            );
+            const replacement = createReplacementNode(translations[index]);
             selection.node.replaceWith(replacement);
         }
     }
@@ -234,13 +176,16 @@ async function processNodeList(nodes, settings) {
     const selections = [];
 
     for (const node of nodes) {
-        const selection = getPhraseSelection(node, settings);
+        const selection = getPhraseSelection(node);
+        
         if (selection) {
             selections.push(selection);
         }
+
     }
 
     if (selections.length === 0) return;
+    console.log("Selected phrase:", selections);
     await translateSelections(selections, settings);
 }
 
@@ -279,21 +224,15 @@ function getProcessingRoot() {
 
 async function loadSettings() {
     try {
-        const storedValues = await chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS));
-        const normalized = normalizeSettings(storedValues);
+        const storedValues = await chrome.storage.local.get(LANGUAGE_STORAGE_KEY);
         return {
-            selectedLanguage: normalized.selectedLanguage,
-            phraseMinWords: normalized.phraseMinWords,
-            phraseMaxWords: normalized.phraseMaxWords,
-            phraseLengthTemperature: normalized.phraseLengthTemperature,
+            selectedLanguage:
+                storedValues[LANGUAGE_STORAGE_KEY] ?? DEFAULT_SETTINGS[LANGUAGE_STORAGE_KEY],
         };
     } catch (error) {
         console.error("Failed to load highlighting settings:", error);
         return {
             selectedLanguage: DEFAULT_SETTINGS.selectedLanguage,
-            phraseMinWords: DEFAULT_SETTINGS.phraseMinWords,
-            phraseMaxWords: DEFAULT_SETTINGS.phraseMaxWords,
-            phraseLengthTemperature: DEFAULT_SETTINGS.phraseLengthTemperature,
         };
     }
 }
