@@ -2,7 +2,7 @@ export const LANGUAGE_STORAGE_KEY = "selectedLanguage";
 export const PHRASE_MIN_STORAGE_KEY = "phraseMinWords";
 export const PHRASE_MAX_STORAGE_KEY = "phraseMaxWords";
 export const PHRASE_TEMPERATURE_STORAGE_KEY = "phraseLengthTemperature";
-export const GEMMA_MODEL = "gemma-3-27b-it";
+export const GEMMA_MODEL = "gemini-3.1-flash-lite-preview";
 
 export const DEFAULT_SETTINGS = {
   [LANGUAGE_STORAGE_KEY]: "spanish",

@@ -1,6 +1,7 @@
 import http from "node:http";
 import { LOCAL_GEMMA_API_KEY, SERVER_PORT } from "./local-config.js";
 import { GEMMA_MODEL } from "../src/shared/settings.js";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   buildMarkerizedTextFromSplitText,
   buildPlainTextFromParsedMarkers,
@@ -10,7 +11,9 @@ import {
   reconstructHtmlFromParsedMarkers,
 } from "../src/shared/translationMarkup.js";
 
-const GEMMA_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMMA_MODEL}:generateContent`;
+const genAIClient = new GoogleGenerativeAI(LOCAL_GEMMA_API_KEY);
+
+const GEMMA_ENDPOINT = `https://googleapis.com${GEMMA_MODEL}:streamGenerateContent`;
 const SERVER_HOST = "127.0.0.1";
 const MAX_TRANSLATION_ATTEMPTS = 3;
 const FALLBACK_RETRY_DELAY_MS = 60_000;
@@ -39,7 +42,7 @@ function enqueueTranslation(task) {
   return queuedTask;
 }
 
-function buildTranslationPrompt(markerizedText, targetLanguage) {
+function buildTranslationPrompt(targetLanguage) {
 
   return [
     `Rewrite input in ${targetLanguage}`,
@@ -49,8 +52,7 @@ function buildTranslationPrompt(markerizedText, targetLanguage) {
     "Dont: add remove rename duplicate reorder marker bounds",
     "Keep marker structure identical to input",
     "Return only translated paragraph w/ markers",
-    "Do not return markdown code fences notes text or alternatives",
-    `Input: ${JSON.stringify(markerizedText)}`
+    "Do not return markdown code fences notes text or alternatives"
     ].join("\n")
 
   return [
@@ -136,47 +138,28 @@ async function readJsonBody(request) {
   return rawBody ? JSON.parse(rawBody) : {};
 }
 
-async function requestGemma(prompt) {
-  const response = await fetch(`${GEMMA_ENDPOINT}?key=${encodeURIComponent(LOCAL_GEMMA_API_KEY)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [{ text: prompt }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.1,
-      },
-    }),
-  });
-
-  const responseJson = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const retryDelayMs = getRetryDelayMs(response.status, responseJson, response.headers);
-    const message =
-      responseJson?.error?.message ||
-      `Gemma request failed with status ${response.status}.`;
-
-    if (retryDelayMs) {
-      throw new RetryableTranslationError(message, retryDelayMs);
+async function requestGemma(prompt, text) {
+  const model = genAIClient.getGenerativeModel(
+    {
+      model: GEMMA_MODEL,
+      systemInstruction: prompt,
     }
+  );
+  const generationConfig = {
+    temperature: 0,
+    responseMimeType: "text/plain"
+  };
 
-    throw new Error(message);
+  const response = await model.generateContent({
+    contents: [{ role: "user", parts: [{ "text": text }] }],
+    generationConfig
   }
+  );
 
-  const translatedText = extractGemmaText(responseJson);
-  if (!translatedText) {
-    throw new Error("Gemma returned an empty translation.");
-  }
-
-  return translatedText;
+  return response.response.text();
 }
 
-async function requestGemmaWithRetries(prompt) {
+async function requestGemmaWithRetries(prompt, text) {
   let attempt = 0;
   let lastError = null;
 
@@ -184,7 +167,7 @@ async function requestGemmaWithRetries(prompt) {
     attempt += 1;
 
     try {
-      return await requestGemma(prompt);
+      return await requestGemma(prompt, text);
     } catch (error) {
       lastError = error;
 
@@ -205,15 +188,21 @@ async function translateParagraph({ splitText, targetLanguage }) {
     throw new Error("Paragraph did not contain any translatable text.");
   }
 
-  const prompt = buildTranslationPrompt(markerizedText, targetLanguage);
+  const prompt = buildTranslationPrompt(targetLanguage);
+  console.log("Running")
   const translatedMarkerizedText = await enqueueTranslation(() =>
-    requestGemmaWithRetries(prompt)
+    requestGemmaWithRetries(prompt, markerizedText)
   );
+
+  console.log("translation", translatedMarkerizedText)
 
   const parsedTranslation = parseTranslatedMarkerizedText(
     translatedMarkerizedText,
     segments
   );
+
+  // console.log("parsedTranslation", parsedTranslation)
+
   if (!parsedTranslation.ok) {
     throw new MarkerValidationError(parsedTranslation.error);
   }
@@ -254,6 +243,7 @@ const server = http.createServer(async (request, response) => {
   try {
     const body = await readJsonBody(request);
     const splitText = body?.splitText;
+    const rawText = body?.rawText;
     const targetLanguage = String(body?.targetLanguage ?? "").trim();
 
     if (!Array.isArray(splitText)) {
@@ -266,9 +256,9 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    const sourceText = buildRawTextFromSplitText(splitText);
+    const sourceText = rawText || buildRawTextFromSplitText(splitText);
     if (!sourceText) {
-      sendJson(response, 400, { error: "splitText did not contain any text." });
+      sendJson(response, 400, { error: "No text available for translation." });
       return;
     }
 
