@@ -280,6 +280,8 @@ async function translateSelection(selection, settings) {
             const streamError = chrome.runtime.lastError?.message;
             if (streamError) {
                 console.error("Translation stream disconnected:", streamError);
+            } else {
+                console.error("Translation stream disconnected before completion.");
             }
             if (!hasRenderedChunk && selection.node.isConnected) {
                 restoreOriginalParagraphHtml(selection.node, originalHtml);

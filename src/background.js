@@ -53,6 +53,7 @@ async function streamTranslation({ rawText, splitText, targetLanguage, onEvent }
     throw new Error(`Backend request failed (${response.status}): ${errorText}`);
   }
 
+  let sawTerminalEvent = false;
   await readNdjsonStream(response, (event) => {
     if (!event || typeof event !== "object") {
       return;
@@ -62,8 +63,16 @@ async function streamTranslation({ rawText, splitText, targetLanguage, onEvent }
       throw new Error(event.error || "Backend stream failed.");
     }
 
+    if (event.type === "done") {
+      sawTerminalEvent = true;
+    }
+
     onEvent(event);
   });
+
+  if (!sawTerminalEvent) {
+    throw new Error("Backend stream ended before sending a completion event.");
+  }
 }
 
 chrome.runtime.onConnect.addListener((port) => {

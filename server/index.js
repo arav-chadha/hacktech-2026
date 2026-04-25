@@ -1,7 +1,7 @@
 import http from "node:http";
 import { LOCAL_GEMMA_API_KEY, SERVER_PORT } from "./local-config.js";
 import { GEMMA_MODEL } from "../src/shared/settings.js";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, GoogleGenerativeAIFetchError } from "@google/generative-ai";
 import {
   buildMarkerizedTextFromSplitText,
   buildPlainTextFromParsedMarkers,
@@ -14,6 +14,8 @@ import {
 const genAIClient = new GoogleGenerativeAI(LOCAL_GEMMA_API_KEY);
 
 const SERVER_HOST = "127.0.0.1";
+const MAX_TRANSLATION_ATTEMPTS = 3;
+const FALLBACK_RETRY_DELAY_MS = 60_000;
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -23,6 +25,16 @@ function sendJson(response, statusCode, payload) {
     "Content-Type": "application/json",
   });
   response.end(JSON.stringify(payload));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function logServerEvent(event, details = {}) {
+  console.log(`[translation-server] ${event}`, details);
 }
 
 function buildTranslationPrompt(targetLanguage) {
@@ -61,6 +73,48 @@ class MarkerValidationError extends Error {
   }
 }
 
+function parseRetryDelayMs(retryDelay) {
+  if (typeof retryDelay !== "string") {
+    return null;
+  }
+
+  const seconds = Number.parseFloat(retryDelay.replace(/s$/, ""));
+  if (!Number.isFinite(seconds)) {
+    return null;
+  }
+
+  return Math.ceil(seconds * 1000);
+}
+
+function getRetryDelayMs(error) {
+  const retryInfo = error?.errorDetails?.find(
+    (detail) => detail?.["@type"] === "type.googleapis.com/google.rpc.RetryInfo"
+  );
+  const retryDelayMs = parseRetryDelayMs(retryInfo?.retryDelay);
+  if (retryDelayMs) {
+    return retryDelayMs;
+  }
+
+  if (error?.status === 429) {
+    return FALLBACK_RETRY_DELAY_MS;
+  }
+
+  return null;
+}
+
+function toRetryableTranslationError(error) {
+  if (!(error instanceof GoogleGenerativeAIFetchError)) {
+    return null;
+  }
+
+  const retryDelayMs = getRetryDelayMs(error);
+  if (!retryDelayMs) {
+    return null;
+  }
+
+  return new RetryableTranslationError(error.message, retryDelayMs);
+}
+
 async function readJsonBody(request) {
   const chunks = [];
 
@@ -97,6 +151,12 @@ function beginTranslationStream(response) {
 }
 
 async function requestGemmaStream(prompt, text) {
+  logServerEvent("gemini-stream-request-start", {
+    model: GEMMA_MODEL,
+    promptLength: prompt.length,
+    textLength: text.length,
+  });
+
   const model = genAIClient.getGenerativeModel(
     {
       model: GEMMA_MODEL,
@@ -108,10 +168,16 @@ async function requestGemmaStream(prompt, text) {
     responseMimeType: "text/plain",
   };
 
-  return model.generateContentStream({
+  const streamResult = await model.generateContentStream({
     contents: [{ role: "user", parts: [{ "text": text }] }],
     generationConfig,
   });
+
+  logServerEvent("gemini-stream-request-opened", {
+    model: GEMMA_MODEL,
+  });
+
+  return streamResult;
 }
 
 async function streamTranslatedParagraph({ splitText, targetLanguage, onChunk }) {
@@ -121,45 +187,124 @@ async function streamTranslatedParagraph({ splitText, targetLanguage, onChunk })
   }
 
   const prompt = buildTranslationPrompt(targetLanguage);
-  let streamedMarkerizedText = "";
-  let lastSentMarkerizedText = "";
+  let attempt = 0;
 
-  const streamResult = await requestGemmaStream(prompt, markerizedText);
+  logServerEvent("translation-start", {
+    targetLanguage,
+    segmentCount: segments.length,
+    markerizedLength: markerizedText.length,
+  });
 
-  for await (const responseChunk of streamResult.stream) {
-    const chunkText = extractGemmaText(responseChunk);
-    if (!chunkText) {
-      continue;
-    }
+  while (attempt < MAX_TRANSLATION_ATTEMPTS) {
+    attempt += 1;
 
-    streamedMarkerizedText += chunkText;
-    const parsedChunk = parseTranslatedMarkerizedText(streamedMarkerizedText, segments);
-    if (!parsedChunk.ok) {
-      throw new MarkerValidationError(parsedChunk.error);
-    }
+    let streamedMarkerizedText = "";
+    let lastSentMarkerizedText = "";
+    let chunkCount = 0;
 
-    if (
-      parsedChunk.normalizedText &&
-      parsedChunk.normalizedText !== lastSentMarkerizedText
-    ) {
-      lastSentMarkerizedText = parsedChunk.normalizedText;
-      onChunk?.(buildTranslationFromParsed(parsedChunk, segments));
+    try {
+      logServerEvent("translation-attempt-start", {
+        attempt,
+        maxAttempts: MAX_TRANSLATION_ATTEMPTS,
+        targetLanguage,
+      });
+
+      const streamResult = await requestGemmaStream(prompt, markerizedText);
+
+      for await (const responseChunk of streamResult.stream) {
+        const chunkText = extractGemmaText(responseChunk);
+        if (!chunkText) {
+          continue;
+        }
+
+        chunkCount += 1;
+        streamedMarkerizedText += chunkText;
+        const parsedChunk = parseTranslatedMarkerizedText(streamedMarkerizedText, segments);
+        if (!parsedChunk.ok) {
+          logServerEvent("translation-marker-parse-error", {
+            attempt,
+            chunkCount,
+            error: parsedChunk.error,
+          });
+          throw new MarkerValidationError(parsedChunk.error);
+        }
+
+        if (
+          parsedChunk.normalizedText &&
+          parsedChunk.normalizedText !== lastSentMarkerizedText
+        ) {
+          lastSentMarkerizedText = parsedChunk.normalizedText;
+          logServerEvent("translation-chunk-emitted", {
+            attempt,
+            chunkCount,
+            emittedLength: parsedChunk.normalizedText.length,
+            complete: parsedChunk.complete,
+          });
+          onChunk?.(buildTranslationFromParsed(parsedChunk, segments));
+        }
+      }
+
+      await streamResult.response;
+      const parsedTranslation = parseTranslatedMarkerizedText(streamedMarkerizedText, segments);
+      if (!parsedTranslation.ok) {
+        logServerEvent("translation-final-parse-error", {
+          attempt,
+          chunkCount,
+          error: parsedTranslation.error,
+        });
+        throw new MarkerValidationError(parsedTranslation.error);
+      }
+
+      if (!parsedTranslation.complete) {
+        logServerEvent("translation-incomplete-output", {
+          attempt,
+          chunkCount,
+          finalLength: parsedTranslation.normalizedText.length,
+        });
+        throw new MarkerValidationError("Model returned incomplete marker output.");
+      }
+
+      logServerEvent("translation-attempt-success", {
+        attempt,
+        chunkCount,
+        finalLength: parsedTranslation.normalizedText.length,
+      });
+      return buildTranslationFromParsed(parsedTranslation, segments);
+    } catch (error) {
+      const retryableError = toRetryableTranslationError(error);
+      const canRetry =
+        retryableError &&
+        attempt < MAX_TRANSLATION_ATTEMPTS &&
+        !lastSentMarkerizedText;
+
+      logServerEvent("translation-attempt-error", {
+        attempt,
+        chunkCount,
+        canRetry: Boolean(canRetry),
+        retryDelayMs: retryableError?.retryDelayMs ?? null,
+        errorName: error?.name ?? null,
+        errorMessage: error?.message ?? String(error),
+        errorStatus: error?.status ?? null,
+        errorDetails: error?.errorDetails ?? null,
+      });
+
+      if (!canRetry) {
+        throw retryableError ?? error;
+      }
+
+      logServerEvent("translation-attempt-retrying", {
+        attempt,
+        retryDelayMs: retryableError.retryDelayMs,
+      });
+      await delay(retryableError.retryDelayMs);
     }
   }
 
-  await streamResult.response;
-  const finalMarkerizedText = streamedMarkerizedText;
-
-  const parsedTranslation = parseTranslatedMarkerizedText(finalMarkerizedText, segments);
-  if (!parsedTranslation.ok) {
-    throw new MarkerValidationError(parsedTranslation.error);
-  }
-
-  if (!parsedTranslation.complete) {
-    throw new MarkerValidationError("Model returned incomplete marker output.");
-  }
-
-  return buildTranslationFromParsed(parsedTranslation, segments);
+  logServerEvent("translation-failed", {
+    targetLanguage,
+    maxAttempts: MAX_TRANSLATION_ATTEMPTS,
+  });
+  throw new Error("Translation failed.");
 }
 
 const server = http.createServer(async (request, response) => {
@@ -194,6 +339,14 @@ const server = http.createServer(async (request, response) => {
     const rawText = body?.rawText;
     const targetLanguage = String(body?.targetLanguage ?? "").trim();
 
+    logServerEvent("http-translate-request", {
+      method: request.method,
+      url: request.url,
+      targetLanguage,
+      splitTextCount: Array.isArray(splitText) ? splitText.length : null,
+      rawTextLength: typeof rawText === "string" ? rawText.length : null,
+    });
+
     if (!Array.isArray(splitText)) {
       sendJson(response, 400, { error: "splitText is required." });
       return;
@@ -216,6 +369,11 @@ const server = http.createServer(async (request, response) => {
       splitText,
       targetLanguage,
       onChunk(partialTranslation) {
+        logServerEvent("http-translate-stream-chunk", {
+          targetLanguage,
+          htmlLength: partialTranslation.html.length,
+          textLength: partialTranslation.text.length,
+        });
         writeStreamEvent(response, {
           type: "chunk",
           sourceText,
@@ -229,11 +387,23 @@ const server = http.createServer(async (request, response) => {
       sourceText,
       translation,
     });
+    logServerEvent("http-translate-stream-done", {
+      targetLanguage,
+      htmlLength: translation.html.length,
+      textLength: translation.text.length,
+    });
     response.end();
   } catch (error) {
-    console.error("Translation request failed:", error);
+    console.error("[translation-server] Translation request failed:", error);
 
     if (response.headersSent) {
+      logServerEvent("http-translate-stream-error", {
+        targetLanguage: null,
+        errorName: error?.name ?? null,
+        errorMessage: error?.message ?? String(error),
+        retryAfterMs:
+          error instanceof RetryableTranslationError ? error.retryDelayMs : null,
+      });
       writeStreamEvent(response, {
         type: "error",
         error:
@@ -247,6 +417,12 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    logServerEvent("http-translate-request-error", {
+      errorName: error?.name ?? null,
+      errorMessage: error?.message ?? String(error),
+      retryAfterMs:
+        error instanceof RetryableTranslationError ? error.retryDelayMs : null,
+    });
     sendJson(response, error instanceof MarkerValidationError ? 422 : 500, {
       error:
         error instanceof MarkerValidationError
