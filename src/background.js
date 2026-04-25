@@ -1,16 +1,22 @@
 import browser from "webextension-polyfill";
-const BACKEND_TRANSLATE_ENDPOINT = "http://127.0.0.1:8787/translate";
+const BACKEND_SELECT_AND_TRANSLATE_ENDPOINT = "http://127.0.0.1:8787/select-and-translate";
 
-async function translateParagraph({ rawText, splitText, targetLanguage }) {
-  const response = await fetch(BACKEND_TRANSLATE_ENDPOINT, {
+async function selectAndTranslatePhrases({
+  pageUrl,
+  candidates,
+  targetLanguage,
+  readerKnowledgeLevel,
+}) {
+  const response = await fetch(BACKEND_SELECT_AND_TRANSLATE_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      rawText,
-      splitText,
+      pageUrl,
+      candidates,
       targetLanguage,
+      readerKnowledgeLevel,
     }),
   });
 
@@ -20,22 +26,22 @@ async function translateParagraph({ rawText, splitText, targetLanguage }) {
   }
 
   const responseData = await response.json();
-  if (!responseData?.translation || typeof responseData.translation.html !== "string") {
+  if (!Array.isArray(responseData?.translatedPhrases)) {
     throw new Error(responseData?.error || "Backend returned an invalid response.");
   }
 
-  return responseData.translation;
+  return responseData.translatedPhrases;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "TRANSLATE_PHRASES") {
+  if (message?.type !== "SELECT_AND_TRANSLATE_PHRASES") {
     return undefined;
   }
 
-  translateParagraph(message.payload)
-    .then((translation) => sendResponse({ translation }))
+  selectAndTranslatePhrases(message.payload)
+    .then((translatedPhrases) => sendResponse({ translatedPhrases }))
     .catch((error) => {
-      console.error("Gemma translation request failed:", error);
+      console.error("Selection and translation request failed:", error);
       sendResponse({ error: error.message });
     });
 

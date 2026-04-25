@@ -5,19 +5,16 @@ import "./Popup.css";
 import {
   DEFAULT_SETTINGS,
   LANGUAGE_STORAGE_KEY,
-  PHRASE_MAX_STORAGE_KEY,
-  PHRASE_MIN_STORAGE_KEY,
-  PHRASE_TEMPERATURE_STORAGE_KEY,
+  KNOWLEDGE_LEVEL_TO_RATIO,
+  READER_KNOWLEDGE_LEVEL_STORAGE_KEY,
   normalizeSettings,
 } from "../shared/settings";
 
 export default function Popup() {
   const [settings, setSettings] = useState({
     [LANGUAGE_STORAGE_KEY]: DEFAULT_SETTINGS[LANGUAGE_STORAGE_KEY],
-    [PHRASE_MIN_STORAGE_KEY]: String(DEFAULT_SETTINGS[PHRASE_MIN_STORAGE_KEY]),
-    [PHRASE_MAX_STORAGE_KEY]: String(DEFAULT_SETTINGS[PHRASE_MAX_STORAGE_KEY]),
-    [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
-      DEFAULT_SETTINGS[PHRASE_TEMPERATURE_STORAGE_KEY]
+    [READER_KNOWLEDGE_LEVEL_STORAGE_KEY]: String(
+      DEFAULT_SETTINGS[READER_KNOWLEDGE_LEVEL_STORAGE_KEY]
     ),
   });
   const [status, setStatus] = useState("Loading settings...");
@@ -31,13 +28,11 @@ export default function Popup() {
         const normalizedSettings = normalizeSettings(storedValues);
         setSettings({
           [LANGUAGE_STORAGE_KEY]: normalizedSettings[LANGUAGE_STORAGE_KEY],
-          [PHRASE_MIN_STORAGE_KEY]: String(normalizedSettings[PHRASE_MIN_STORAGE_KEY]),
-          [PHRASE_MAX_STORAGE_KEY]: String(normalizedSettings[PHRASE_MAX_STORAGE_KEY]),
-          [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
-            normalizedSettings[PHRASE_TEMPERATURE_STORAGE_KEY]
+          [READER_KNOWLEDGE_LEVEL_STORAGE_KEY]: String(
+            normalizedSettings[READER_KNOWLEDGE_LEVEL_STORAGE_KEY]
           ),
         });
-        setStatus("Edit settings, then save to reload translation.");
+        setStatus("Edit settings, then save to reload the current page.");
       } catch (error) {
         console.error("Failed to load extension settings:", error);
         setStatus("Couldn't load saved settings.");
@@ -62,18 +57,14 @@ export default function Popup() {
     try {
       const normalizedSettings = normalizeSettings({
         [LANGUAGE_STORAGE_KEY]: settings[LANGUAGE_STORAGE_KEY],
-        [PHRASE_MIN_STORAGE_KEY]: settings[PHRASE_MIN_STORAGE_KEY],
-        [PHRASE_MAX_STORAGE_KEY]: settings[PHRASE_MAX_STORAGE_KEY],
-        [PHRASE_TEMPERATURE_STORAGE_KEY]: settings[PHRASE_TEMPERATURE_STORAGE_KEY],
+        [READER_KNOWLEDGE_LEVEL_STORAGE_KEY]: settings[READER_KNOWLEDGE_LEVEL_STORAGE_KEY],
       });
 
       await chrome.storage.local.set(normalizedSettings);
       setSettings({
         [LANGUAGE_STORAGE_KEY]: normalizedSettings[LANGUAGE_STORAGE_KEY],
-        [PHRASE_MIN_STORAGE_KEY]: String(normalizedSettings[PHRASE_MIN_STORAGE_KEY]),
-        [PHRASE_MAX_STORAGE_KEY]: String(normalizedSettings[PHRASE_MAX_STORAGE_KEY]),
-        [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
-          normalizedSettings[PHRASE_TEMPERATURE_STORAGE_KEY]
+        [READER_KNOWLEDGE_LEVEL_STORAGE_KEY]: String(
+          normalizedSettings[READER_KNOWLEDGE_LEVEL_STORAGE_KEY]
         ),
       });
       setStatus("Saved. Reloading the current page...");
@@ -97,7 +88,7 @@ export default function Popup() {
       <img src="/icon-with-shadow.svg" alt="Language Extension icon" />
       <div className="popup__copy">
         <h1>Language Extension</h1>
-        <p>Translate random phrases with hosted Gemma and tune phrase selection.</p>
+        <p>Pick a target language and how aggressively the reader should see translated phrases.</p>
       </div>
 
       <label className="popup__field" htmlFor="language-select">
@@ -113,50 +104,28 @@ export default function Popup() {
         </select>
       </label>
 
-      <div className="popup__grid">
-        <label className="popup__field" htmlFor="phrase-min">
-          <span>Min Words</span>
-          <input
-            id="phrase-min"
-            name={PHRASE_MIN_STORAGE_KEY}
-            type="number"
-            min="1"
-            max="10"
-            value={settings[PHRASE_MIN_STORAGE_KEY]}
-            onChange={handleFieldChange}
-          />
-        </label>
-
-        <label className="popup__field" htmlFor="phrase-max">
-          <span>Max Words</span>
-          <input
-            id="phrase-max"
-            name={PHRASE_MAX_STORAGE_KEY}
-            type="number"
-            min="1"
-            max="10"
-            value={settings[PHRASE_MAX_STORAGE_KEY]}
-            onChange={handleFieldChange}
-          />
-        </label>
-      </div>
-
-      <label className="popup__field" htmlFor="phrase-temperature">
+      <label className="popup__field" htmlFor="knowledge-level">
         <div className="popup__label-row">
-          <span>Length Bias</span>
-          <strong>{Number(settings[PHRASE_TEMPERATURE_STORAGE_KEY]).toFixed(2)}</strong>
+          <span>Reader Knowledge</span>
+          <strong>Level {settings[READER_KNOWLEDGE_LEVEL_STORAGE_KEY]}</strong>
         </div>
         <input
-          id="phrase-temperature"
-          name={PHRASE_TEMPERATURE_STORAGE_KEY}
+          id="knowledge-level"
+          name={READER_KNOWLEDGE_LEVEL_STORAGE_KEY}
           type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={settings[PHRASE_TEMPERATURE_STORAGE_KEY]}
+          min="1"
+          max="3"
+          step="1"
+          value={settings[READER_KNOWLEDGE_LEVEL_STORAGE_KEY]}
           onChange={handleFieldChange}
         />
-        <small>0 favors shorter phrases. 1 favors longer phrases.</small>
+        <small>
+          Level {settings[READER_KNOWLEDGE_LEVEL_STORAGE_KEY]} translates about{" "}
+          {Math.round(
+            KNOWLEDGE_LEVEL_TO_RATIO[Number(settings[READER_KNOWLEDGE_LEVEL_STORAGE_KEY])] * 100
+          )}
+          % of detected phrases.
+        </small>
       </label>
 
       <button className="popup__button" type="submit" disabled={isSaving}>
