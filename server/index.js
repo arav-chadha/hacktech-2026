@@ -1,6 +1,11 @@
 import http from "node:http";
 import { LOCAL_GEMMA_API_KEY, SERVER_PORT } from "./local-config.js";
-import { GEMMA_MODEL } from "../src/shared/settings.js";
+import {
+  GEMMA_MODEL,
+  PREPROMPT_BEGINNER,
+  PREPROMPT_SUFFIX,
+  normalizeSettings,
+} from "../src/shared/settings.js";
 import { GoogleGenerativeAI, GoogleGenerativeAIFetchError } from "@google/generative-ai";
 import {
   buildMarkerizedTextFromSplitText,
@@ -37,19 +42,32 @@ function logServerEvent(event, details = {}) {
   console.log(`[translation-server] ${event}`, details);
 }
 
-function buildTranslationPrompt(targetLanguage) {
+function describeLengthBias(temperature) {
+  if (temperature <= 0.33) {
+    return "Favor shorter translated spans whenever possible.";
+  }
+
+  if (temperature >= 0.67) {
+    return "You may use slightly longer translated spans when still obeying all other rules.";
+  }
+
+  return "Prefer short translated spans over longer ones.";
+}
+
+function buildTranslationPrompt(targetLanguage, settings) {
+  const minWords = settings?.phraseMinWords ?? 1;
+  const maxWords = settings?.phraseMaxWords ?? 4;
+  const maxCoveragePercent = Math.max(8, Math.min(20, maxWords * 4));
+
   return [
-    `Rewrite input in ${targetLanguage}`,
-    "Only translate 10% of the text, focusing on short phrases and words",
-    "Keep spacing and punctuation identical to input",
-    "Preserve whitespace between translated words; do not merge or remove spaces",
-    "Translate naturally, especially text in markers",
-    "Do not surround text w/ * \' or \"",
-    "Preserve markers exactly, both open and closed forms",
-    "Dont: add remove rename duplicate reorder marker bounds",
-    "Keep marker structure identical to input",
-    "Return only translated paragraph w/ markers",
-    "Do not return markdown code fences notes text or alternatives",
+    `Partially translate the input into ${targetLanguage}.`,
+    PREPROMPT_BEGINNER,
+    `Each translated span must be between ${minWords} and ${maxWords} words inclusive.`,
+    `Never translate more than ${maxWords} consecutive words in any one span.`,
+    `Translate at most about ${maxCoveragePercent}% of the words in the paragraph.`,
+    "Prefer multiple isolated translated spans instead of one large translated chunk.",
+    describeLengthBias(settings?.phraseLengthTemperature ?? 0.5),
+    PREPROMPT_SUFFIX,
   ].join("\n");
 }
 
@@ -510,13 +528,13 @@ async function requestGemmaStream(prompt, text) {
   return streamResult;
 }
 
-async function streamTranslatedParagraph({ splitText, targetLanguage, onChunk }) {
+async function streamTranslatedParagraph({ splitText, targetLanguage, settings, onChunk }) {
   const { markerizedText, segments } = buildMarkerizedTextFromSplitText(splitText);
   if (!markerizedText) {
     throw new Error("Paragraph did not contain any translatable text.");
   }
 
-  const prompt = buildTranslationPrompt(targetLanguage);
+  const prompt = buildTranslationPrompt(targetLanguage, settings);
   let attempt = 0;
 
   logServerEvent("translation-start", {
@@ -668,6 +686,12 @@ const server = http.createServer(async (request, response) => {
     const splitText = body?.splitText;
     const rawText = body?.rawText;
     const targetLanguage = String(body?.targetLanguage ?? "").trim();
+    const normalizedSettings = normalizeSettings({
+      selectedLanguage: targetLanguage,
+      phraseMinWords: body?.phraseMinWords,
+      phraseMaxWords: body?.phraseMaxWords,
+      phraseLengthTemperature: body?.phraseLengthTemperature,
+    });
 
     logServerEvent("http-translate-request", {
       method: request.method,
@@ -675,6 +699,9 @@ const server = http.createServer(async (request, response) => {
       targetLanguage,
       splitTextCount: Array.isArray(splitText) ? splitText.length : null,
       rawTextLength: typeof rawText === "string" ? rawText.length : null,
+      phraseMinWords: normalizedSettings.phraseMinWords,
+      phraseMaxWords: normalizedSettings.phraseMaxWords,
+      phraseLengthTemperature: normalizedSettings.phraseLengthTemperature,
     });
 
     if (!Array.isArray(splitText)) {
@@ -698,6 +725,7 @@ const server = http.createServer(async (request, response) => {
     const translation = await streamTranslatedParagraph({
       splitText,
       targetLanguage,
+      settings: normalizedSettings,
       onChunk(partialTranslation) {
         logServerEvent("http-translate-stream-chunk", {
           targetLanguage,

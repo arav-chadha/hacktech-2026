@@ -35,7 +35,15 @@ async function readNdjsonStream(response, onEvent) {
   }
 }
 
-async function streamTranslation({ rawText, splitText, targetLanguage, onEvent }) {
+async function streamTranslation({
+  rawText,
+  splitText,
+  targetLanguage,
+  phraseMinWords,
+  phraseMaxWords,
+  phraseLengthTemperature,
+  onEvent,
+}) {
   const response = await fetch(BACKEND_TRANSLATE_ENDPOINT, {
     method: "POST",
     headers: {
@@ -45,6 +53,9 @@ async function streamTranslation({ rawText, splitText, targetLanguage, onEvent }
       rawText,
       splitText,
       targetLanguage,
+      phraseMinWords,
+      phraseMaxWords,
+      phraseLengthTemperature,
     }),
   });
 

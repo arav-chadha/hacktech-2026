@@ -1,4 +1,11 @@
-import { DEFAULT_SETTINGS, LANGUAGE_STORAGE_KEY } from "../shared/settings";
+import {
+    DEFAULT_SETTINGS,
+    LANGUAGE_STORAGE_KEY,
+    PHRASE_MAX_STORAGE_KEY,
+    PHRASE_MIN_STORAGE_KEY,
+    PHRASE_TEMPERATURE_STORAGE_KEY,
+    normalizeSettings,
+} from "../shared/settings";
 import {
     buildRawTextFromSplitText,
     normalizeWhitespace,
@@ -615,6 +622,9 @@ async function translateSelection(selection, settings) {
                 rawText: selection.rawText,
                 splitText: selection.splitText,
                 targetLanguage: settings.selectedLanguage,
+                phraseMinWords: settings.phraseMinWords,
+                phraseMaxWords: settings.phraseMaxWords,
+                phraseLengthTemperature: settings.phraseLengthTemperature,
             },
         });
     });
@@ -686,16 +696,10 @@ function getProcessingRoot() {
 
 async function loadSettings() {
     try {
-        const storedValues = await chrome.storage.local.get(LANGUAGE_STORAGE_KEY);
-        return {
-            selectedLanguage:
-                storedValues[LANGUAGE_STORAGE_KEY] ?? DEFAULT_SETTINGS[LANGUAGE_STORAGE_KEY],
-        };
+        return normalizeSettings(await chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS)));
     } catch (error) {
         console.error("Failed to load highlighting settings:", error);
-        return {
-            selectedLanguage: DEFAULT_SETTINGS.selectedLanguage,
-        };
+        return { ...DEFAULT_SETTINGS };
     }
 }
 
