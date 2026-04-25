@@ -52,6 +52,7 @@ const EXCLUDED_CONTAINER_SELECTOR = [
 
 let userEmail = null;
 let activeToastTimeout = null;
+let activeHoverAlertTimeout = null;
 
 chrome.storage.local.get("userEmail", (data) => {
   console.log("Fetching email");
@@ -215,11 +216,15 @@ function ensureAlignmentStyles() {
             text-decoration: underline;
             text-decoration-style: dotted;
             text-underline-offset: 0.12em;
+            background: rgba(210, 214, 220, 0.35);
+            border-radius: 0.2em;
+            box-shadow: 0 0 0 1px rgba(190, 195, 201, 0.45);
         }
 
         [${ALIGNMENT_TOKEN_ATTR}].language-extension-alignment-active {
-            background: rgba(255, 225, 130, 0.45);
+            background: rgba(220, 224, 230, 0.55);
             border-radius: 0.2em;
+            box-shadow: 0 0 0 1px rgba(160, 166, 173, 0.6);
         }
 
         #${TOAST_ID} {
@@ -283,6 +288,13 @@ function hideAlignmentToast() {
     if (activeToastTimeout) {
         window.clearTimeout(activeToastTimeout);
         activeToastTimeout = null;
+    }
+}
+
+function clearHoverAlertTimeout() {
+    if (activeHoverAlertTimeout) {
+        window.clearTimeout(activeHoverAlertTimeout);
+        activeHoverAlertTimeout = null;
     }
 }
 
@@ -439,6 +451,11 @@ function installAlignmentInteractions() {
         }
 
         showAlignmentToast(alignedToken, sourceText);
+        clearHoverAlertTimeout();
+        activeHoverAlertTimeout = window.setTimeout(() => {
+            activeHoverAlertTimeout = null;
+            alert(sourceText);
+        }, 1000);
     });
 
     document.addEventListener("mouseout", (event) => {
@@ -463,6 +480,7 @@ function installAlignmentInteractions() {
         } else {
             clearActiveAlignmentTokens();
         }
+        clearHoverAlertTimeout();
         hideAlignmentToast();
     });
 }
