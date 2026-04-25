@@ -147,6 +147,8 @@ export default function Popup() {
         >
           <option value="beginner">Beginner</option>
           <option value="elementary">Elementary</option>
+          <option value="intermediate">Intermediate</option>
+          <option value="advanced">Advanced</option>
         </select>
       </label>
 

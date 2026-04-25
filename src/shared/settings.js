@@ -35,6 +35,23 @@ export const PREPROMPT_ELEMENTARY = [
   "If a choice is ambiguous, leave the original word unchanged."
 ].join("\n");
 
+export const PREPROMPT_INTERMEDIATE = [
+  "Translate a broad but still partial subset of the paragraph into the target language.",
+  "Some words may remain in the original language, but translated coverage should be much higher than beginner or elementary.",
+  "Translate nouns, articles, pronouns, prepositions, conjunctions, adjectives, and adverbs.",
+  "For verbs, translate only simple present tense forms. Do not translate past, future, progressive, perfect, conditional, imperative, or other verb tenses.",
+  "If a verb tense is ambiguous or not simple present, leave the original verb unchanged.",
+  "If a choice is ambiguous, leave the original word unchanged."
+].join("\n");
+
+export const PREPROMPT_ADVANCED = [
+  "Translate almost the entire paragraph into the target language.",
+  "All words are fair game for translation.",
+  "Translate naturally while preserving the original meaning, spacing pattern, punctuation, and marker structure.",
+  "Leave only a small residual amount of the original language when needed to stay within the requested partial-translation behavior.",
+  "If a choice is ambiguous, choose the most natural translation."
+].join("\n");
+
 export const BEGINNER_SETTINGS = {
   [LANGUAGE_STORAGE_KEY]: "spanish",
   [TRANSLATION_LEVEL_STORAGE_KEY]: "beginner",
@@ -53,11 +70,31 @@ export const ELEMENTARY_SETTINGS = {
   [PHRASE_TEMPERATURE_STORAGE_KEY]: 0.2,
 };
 
+export const INTERMEDIATE_SETTINGS = {
+  [LANGUAGE_STORAGE_KEY]: "spanish",
+  [TRANSLATION_LEVEL_STORAGE_KEY]: "intermediate",
+  [PHRASE_MIN_STORAGE_KEY]: 1,
+  [PHRASE_MAX_STORAGE_KEY]: 6,
+  [PHRASE_COVERAGE_STORAGE_KEY]: 64,
+  [PHRASE_TEMPERATURE_STORAGE_KEY]: 0.35,
+};
+
+export const ADVANCED_SETTINGS = {
+  [LANGUAGE_STORAGE_KEY]: "spanish",
+  [TRANSLATION_LEVEL_STORAGE_KEY]: "advanced",
+  [PHRASE_MIN_STORAGE_KEY]: 1,
+  [PHRASE_MAX_STORAGE_KEY]: 8,
+  [PHRASE_COVERAGE_STORAGE_KEY]: 90,
+  [PHRASE_TEMPERATURE_STORAGE_KEY]: 0.5,
+};
+
 export const DEFAULT_SETTINGS = BEGINNER_SETTINGS;
 
 export const SETTINGS_PRESETS = {
   beginner: BEGINNER_SETTINGS,
   elementary: ELEMENTARY_SETTINGS,
+  intermediate: INTERMEDIATE_SETTINGS,
+  advanced: ADVANCED_SETTINGS,
 };
 
 export function clampNumber(value, min, max) {
@@ -66,7 +103,13 @@ export function clampNumber(value, min, max) {
 
 export function normalizeSettings(storedValues = {}) {
   const translationLevel =
-    storedValues[TRANSLATION_LEVEL_STORAGE_KEY] === "elementary" ? "elementary" : "beginner";
+    storedValues[TRANSLATION_LEVEL_STORAGE_KEY] === "advanced"
+      ? "advanced"
+      : storedValues[TRANSLATION_LEVEL_STORAGE_KEY] === "intermediate"
+        ? "intermediate"
+        : storedValues[TRANSLATION_LEVEL_STORAGE_KEY] === "elementary"
+          ? "elementary"
+          : "beginner";
   const levelDefaults = SETTINGS_PRESETS[translationLevel];
   const maxWords = clampNumber(
     Number(storedValues[PHRASE_MAX_STORAGE_KEY] ?? levelDefaults[PHRASE_MAX_STORAGE_KEY]),

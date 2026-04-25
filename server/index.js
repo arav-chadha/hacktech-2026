@@ -2,8 +2,10 @@ import http from "node:http";
 import { LOCAL_GEMMA_API_KEY, SERVER_PORT } from "./local-config.js";
 import {
   GEMMA_MODEL,
+  PREPROMPT_ADVANCED,
   PREPROMPT_BEGINNER,
   PREPROMPT_ELEMENTARY,
+  PREPROMPT_INTERMEDIATE,
   PREPROMPT_SUFFIX,
   normalizeSettings,
 } from "../src/shared/settings.js";
@@ -56,7 +58,33 @@ function describeLengthBias(temperature) {
 }
 
 function getLevelPrompt(translationLevel) {
-  return translationLevel === "elementary" ? PREPROMPT_ELEMENTARY : PREPROMPT_BEGINNER;
+  if (translationLevel === "advanced") {
+    return PREPROMPT_ADVANCED;
+  }
+
+  if (translationLevel === "intermediate") {
+    return PREPROMPT_INTERMEDIATE;
+  }
+
+  if (translationLevel === "elementary") {
+    return PREPROMPT_ELEMENTARY;
+  }
+
+  return PREPROMPT_BEGINNER;
+}
+
+function getPromptSuffix(translationLevel) {
+  const suffixLines = PREPROMPT_SUFFIX.split("\n");
+
+  if (translationLevel !== "advanced") {
+    return suffixLines.join("\n");
+  }
+
+  return suffixLines
+    .filter((line) => line !== "Leave every non-translated word exactly unchanged")
+    .filter((line) => line !== "Do not rewrite, paraphrase, summarize, or fully translate sentences")
+    .concat("Do not paraphrase or summarize; preserve the original meaning while translating.")
+    .join("\n");
 }
 
 function buildTranslationPrompt(targetLanguage, settings) {
@@ -64,18 +92,32 @@ function buildTranslationPrompt(targetLanguage, settings) {
   const minWords = settings?.phraseMinWords ?? 1;
   const maxWords = settings?.phraseMaxWords ?? 4;
   const maxCoveragePercent = settings?.phraseCoveragePercent ?? 16;
+  const promptLines =
+    translationLevel === "advanced"
+      ? [
+          `Translate the input into ${targetLanguage}.`,
+          `Translation level: ${translationLevel}.`,
+          getLevelPrompt(translationLevel),
+          `Translate about ${maxCoveragePercent}% of the words in the paragraph.`,
+          "Longer continuous translated spans are allowed when they sound natural.",
+          describeLengthBias(settings?.phraseLengthTemperature ?? 0.5),
+          getPromptSuffix(translationLevel),
+        ]
+      : [
+          `Partially translate the input into ${targetLanguage}.`,
+          `Translation level: ${translationLevel}.`,
+          getLevelPrompt(translationLevel),
+          `Each translated span must be between ${minWords} and ${maxWords} words inclusive.`,
+          `Never translate more than ${maxWords} consecutive words in any one span.`,
+          `Translate at most about ${maxCoveragePercent}% of the words in the paragraph.`,
+          translationLevel === "intermediate"
+            ? "Allow longer continuous translated spans when they sound natural."
+            : "Prefer multiple isolated translated spans instead of one large translated chunk.",
+          describeLengthBias(settings?.phraseLengthTemperature ?? 0.5),
+          getPromptSuffix(translationLevel),
+        ];
 
-  return [
-    `Partially translate the input into ${targetLanguage}.`,
-    `Translation level: ${translationLevel}.`,
-    getLevelPrompt(translationLevel),
-    `Each translated span must be between ${minWords} and ${maxWords} words inclusive.`,
-    `Never translate more than ${maxWords} consecutive words in any one span.`,
-    `Translate at most about ${maxCoveragePercent}% of the words in the paragraph.`,
-    "Prefer multiple isolated translated spans instead of one large translated chunk.",
-    describeLengthBias(settings?.phraseLengthTemperature ?? 0.5),
-    PREPROMPT_SUFFIX,
-  ].join("\n");
+  return promptLines.join("\n");
 }
 
 function buildAlignmentPrompt(targetLanguage) {
