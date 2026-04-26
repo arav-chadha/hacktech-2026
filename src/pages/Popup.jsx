@@ -15,19 +15,25 @@ import {
   normalizeSettings,
 } from "../shared/settings";
 
-export default function Popup() {
-  const [settings, setSettings] = useState({
-    [LANGUAGE_STORAGE_KEY]: DEFAULT_SETTINGS[LANGUAGE_STORAGE_KEY],
-    [TRANSLATION_LEVEL_STORAGE_KEY]: DEFAULT_SETTINGS[TRANSLATION_LEVEL_STORAGE_KEY],
-    [PHRASE_MIN_STORAGE_KEY]: String(DEFAULT_SETTINGS[PHRASE_MIN_STORAGE_KEY]),
-    [PHRASE_MAX_STORAGE_KEY]: String(DEFAULT_SETTINGS[PHRASE_MAX_STORAGE_KEY]),
-    [PHRASE_COVERAGE_STORAGE_KEY]: String(DEFAULT_SETTINGS[PHRASE_COVERAGE_STORAGE_KEY]),
+function buildSettingsFromNormalized(normalizedSettings) {
+  return {
+    [LANGUAGE_STORAGE_KEY]: normalizedSettings[LANGUAGE_STORAGE_KEY],
+    [TRANSLATION_LEVEL_STORAGE_KEY]: normalizedSettings[TRANSLATION_LEVEL_STORAGE_KEY],
+    [PHRASE_MIN_STORAGE_KEY]: String(normalizedSettings[PHRASE_MIN_STORAGE_KEY]),
+    [PHRASE_MAX_STORAGE_KEY]: String(normalizedSettings[PHRASE_MAX_STORAGE_KEY]),
+    [PHRASE_COVERAGE_STORAGE_KEY]: String(normalizedSettings[PHRASE_COVERAGE_STORAGE_KEY]),
     [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
-      DEFAULT_SETTINGS[PHRASE_TEMPERATURE_STORAGE_KEY]
+      normalizedSettings[PHRASE_TEMPERATURE_STORAGE_KEY]
     ),
-  });
+  };
+}
+
+export default function Popup() {
+  const [settings, setSettings] = useState(buildSettingsFromNormalized(DEFAULT_SETTINGS));
   const [status, setStatus] = useState("Loading settings...");
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
+  const [userExp, setUserExp] = useState(0);
   const {email, loading, error, signIn, logout} = useAuth();
   const usesFullTranslation = isFullTranslationLevel(
     settings[TRANSLATION_LEVEL_STORAGE_KEY]
@@ -38,17 +44,8 @@ export default function Popup() {
       try {
         const storedValues = await chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS));
         const normalizedSettings = normalizeSettings(storedValues);
-        setSettings({
-          [LANGUAGE_STORAGE_KEY]: normalizedSettings[LANGUAGE_STORAGE_KEY],
-          [TRANSLATION_LEVEL_STORAGE_KEY]: normalizedSettings[TRANSLATION_LEVEL_STORAGE_KEY],
-          [PHRASE_MIN_STORAGE_KEY]: String(normalizedSettings[PHRASE_MIN_STORAGE_KEY]),
-          [PHRASE_MAX_STORAGE_KEY]: String(normalizedSettings[PHRASE_MAX_STORAGE_KEY]),
-          [PHRASE_COVERAGE_STORAGE_KEY]: String(normalizedSettings[PHRASE_COVERAGE_STORAGE_KEY]),
-          [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
-            normalizedSettings[PHRASE_TEMPERATURE_STORAGE_KEY]
-          ),
-        });
-        setStatus("Edit settings, then save to reload translation.");
+        setSettings(buildSettingsFromNormalized(normalizedSettings));
+        setStatus("Loading your level from MongoDB...");
       } catch (error) {
         console.error("Failed to load extension settings:", error);
         setStatus("Couldn't load saved settings.");
@@ -58,21 +55,69 @@ export default function Popup() {
     loadSettings();
   }, []);
 
-  function handleFieldChange(event) {
-    const { name, value } = event.target;
-    if (name === TRANSLATION_LEVEL_STORAGE_KEY) {
-      const preset = SETTINGS_PRESETS[value] ?? DEFAULT_SETTINGS;
-      setSettings((currentSettings) => ({
-        ...currentSettings,
-        [TRANSLATION_LEVEL_STORAGE_KEY]: value,
-        [PHRASE_MIN_STORAGE_KEY]: String(preset[PHRASE_MIN_STORAGE_KEY]),
-        [PHRASE_MAX_STORAGE_KEY]: String(preset[PHRASE_MAX_STORAGE_KEY]),
-        [PHRASE_COVERAGE_STORAGE_KEY]: String(preset[PHRASE_COVERAGE_STORAGE_KEY]),
-        [PHRASE_TEMPERATURE_STORAGE_KEY]: String(preset[PHRASE_TEMPERATURE_STORAGE_KEY]),
-      }));
+  useEffect(() => {
+    if (!email || loading) {
       return;
     }
 
+    async function syncLanguageProfile() {
+      setIsLoadingProfile(true);
+
+      try {
+        const selectedLanguage = settings[LANGUAGE_STORAGE_KEY];
+        const response = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage(
+            {
+              type: "GET_LANGUAGE_PROFILE",
+              payload: {
+                userEmail: email,
+                targetLanguage: selectedLanguage,
+              },
+            },
+            (message) => {
+              if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+                return;
+              }
+
+              if (message?.error) {
+                reject(new Error(message.error));
+                return;
+              }
+
+              resolve(message?.profile ?? null);
+            }
+          );
+        });
+
+        const translationLevel = String(response?.translationLevel ?? DEFAULT_SETTINGS[TRANSLATION_LEVEL_STORAGE_KEY]);
+        const exp = Number(response?.exp ?? 0);
+        const preset = SETTINGS_PRESETS[translationLevel] ?? DEFAULT_SETTINGS;
+        const normalizedSettings = normalizeSettings({
+          [LANGUAGE_STORAGE_KEY]: selectedLanguage,
+          [TRANSLATION_LEVEL_STORAGE_KEY]: translationLevel,
+          [PHRASE_MIN_STORAGE_KEY]: preset[PHRASE_MIN_STORAGE_KEY],
+          [PHRASE_MAX_STORAGE_KEY]: preset[PHRASE_MAX_STORAGE_KEY],
+          [PHRASE_COVERAGE_STORAGE_KEY]: preset[PHRASE_COVERAGE_STORAGE_KEY],
+          [PHRASE_TEMPERATURE_STORAGE_KEY]: preset[PHRASE_TEMPERATURE_STORAGE_KEY],
+        });
+
+        setUserExp(exp);
+        setSettings(buildSettingsFromNormalized(normalizedSettings));
+        setStatus("Level is synced from MongoDB based on your EXP.");
+      } catch (profileError) {
+        console.error("Failed to load language profile:", profileError);
+        setStatus("Couldn't load your MongoDB-backed level.");
+      } finally {
+        setIsLoadingProfile(false);
+      }
+    }
+
+    void syncLanguageProfile();
+  }, [email, loading, settings[LANGUAGE_STORAGE_KEY]]);
+
+  function handleFieldChange(event) {
+    const { name, value } = event.target;
     setSettings((currentSettings) => ({
       ...currentSettings,
       [name]: value,
@@ -94,16 +139,7 @@ export default function Popup() {
       });
 
       await chrome.storage.local.set(normalizedSettings);
-      setSettings({
-        [LANGUAGE_STORAGE_KEY]: normalizedSettings[LANGUAGE_STORAGE_KEY],
-        [TRANSLATION_LEVEL_STORAGE_KEY]: normalizedSettings[TRANSLATION_LEVEL_STORAGE_KEY],
-        [PHRASE_MIN_STORAGE_KEY]: String(normalizedSettings[PHRASE_MIN_STORAGE_KEY]),
-        [PHRASE_MAX_STORAGE_KEY]: String(normalizedSettings[PHRASE_MAX_STORAGE_KEY]),
-        [PHRASE_COVERAGE_STORAGE_KEY]: String(normalizedSettings[PHRASE_COVERAGE_STORAGE_KEY]),
-        [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
-          normalizedSettings[PHRASE_TEMPERATURE_STORAGE_KEY]
-        ),
-      });
+      setSettings(buildSettingsFromNormalized(normalizedSettings));
       setStatus("Saved. Reloading the current page...");
 
       const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -151,7 +187,7 @@ export default function Popup() {
           id="translation-level-select"
           name={TRANSLATION_LEVEL_STORAGE_KEY}
           value={settings[TRANSLATION_LEVEL_STORAGE_KEY]}
-          onChange={handleFieldChange}
+          disabled
         >
           <option value="beginner">Beginner</option>
           <option value="elementary">Elementary</option>
@@ -159,6 +195,11 @@ export default function Popup() {
           <option value="advanced">Advanced</option>
           <option value="fluent">Fluent</option>
         </select>
+        <small>
+          {isLoadingProfile
+            ? "Loading level from MongoDB..."
+            : `Synced from MongoDB. Current EXP: ${userExp}.`}
+        </small>
       </label>
 
       <div className="popup__grid">

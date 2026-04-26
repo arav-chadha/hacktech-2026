@@ -22,6 +22,8 @@ import {
 } from "../src/shared/translationMarkup.js";
 import {
   getPriorityWordsForPrompt,
+  getTranslationLevelForExp,
+  getUserLanguageExp,
   recordLanguageExp,
   recordTranslatedWordExp,
   recordWordFeedback,
@@ -1234,6 +1236,39 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  if (request.url === "/language-profile" && request.method === "POST") {
+    try {
+      const body = await readJsonBody(request);
+      const userEmail = String(body?.userEmail ?? "").trim();
+      const targetLanguage = String(body?.targetLanguage ?? "").trim();
+
+      if (!userEmail || !targetLanguage) {
+        sendJson(response, 400, { error: "userEmail and targetLanguage are required." });
+        return;
+      }
+
+      const userExp = await getUserLanguageExp({
+        userEmail,
+        targetLanguage,
+      });
+      const exp = userExp ?? 0;
+      const translationLevel = getTranslationLevelForExp(exp);
+
+      sendJson(response, 200, {
+        ok: true,
+        profile: {
+          exp,
+          translationLevel,
+        },
+      });
+    } catch (error) {
+      sendJson(response, 500, {
+        error: error?.message ?? String(error),
+      });
+    }
+    return;
+  }
+
   if (request.url === "/lookup-word" && request.method === "POST") {
     try {
       const body = await readJsonBody(request);
@@ -1303,29 +1338,6 @@ const server = http.createServer(async (request, response) => {
     const rawText = body?.rawText;
     const targetLanguage = String(body?.targetLanguage ?? "").trim();
     const userEmail = String(body?.userEmail ?? "").trim();
-    const normalizedSettings = normalizeSettings({
-      selectedLanguage: targetLanguage,
-      translationLevel: body?.translationLevel,
-      phraseMinWords: body?.phraseMinWords,
-      phraseMaxWords: body?.phraseMaxWords,
-      phraseCoveragePercent: body?.phraseCoveragePercent,
-      phraseLengthTemperature: body?.phraseLengthTemperature,
-    });
-
-    logServerEvent("http-translate-request", {
-      method: request.method,
-      url: request.url,
-      targetLanguage,
-      userEmailPresent: Boolean(userEmail),
-      splitTextCount: Array.isArray(splitText) ? splitText.length : null,
-      rawTextLength: typeof rawText === "string" ? rawText.length : null,
-      translationLevel: normalizedSettings.translationLevel,
-      phraseMinWords: normalizedSettings.phraseMinWords,
-      phraseMaxWords: normalizedSettings.phraseMaxWords,
-      phraseCoveragePercent: normalizedSettings.phraseCoveragePercent,
-      phraseLengthTemperature: normalizedSettings.phraseLengthTemperature,
-    });
-
     if (!Array.isArray(splitText)) {
       sendJson(response, 400, { error: "splitText is required." });
       return;
@@ -1341,6 +1353,35 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 400, { error: "No text available for translation." });
       return;
     }
+
+    const userExp = await getUserLanguageExp({
+      userEmail,
+      targetLanguage,
+    });
+    const effectiveTranslationLevel =
+      userExp === null
+        ? String(body?.translationLevel ?? "")
+        : getTranslationLevelForExp(userExp);
+    const normalizedSettings = normalizeSettings({
+      selectedLanguage: targetLanguage,
+      translationLevel: effectiveTranslationLevel,
+    });
+
+    logServerEvent("http-translate-request", {
+      method: request.method,
+      url: request.url,
+      targetLanguage,
+      userEmailPresent: Boolean(userEmail),
+      userExp,
+      splitTextCount: Array.isArray(splitText) ? splitText.length : null,
+      rawTextLength: typeof rawText === "string" ? rawText.length : null,
+      requestedTranslationLevel: body?.translationLevel ?? null,
+      effectiveTranslationLevel: normalizedSettings.translationLevel,
+      phraseMinWords: normalizedSettings.phraseMinWords,
+      phraseMaxWords: normalizedSettings.phraseMaxWords,
+      phraseCoveragePercent: normalizedSettings.phraseCoveragePercent,
+      phraseLengthTemperature: normalizedSettings.phraseLengthTemperature,
+    });
 
     const priorityWords = await getPriorityWordsForPrompt({
       userEmail,

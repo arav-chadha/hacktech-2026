@@ -30,6 +30,66 @@ function getUniqueTerms(text) {
   );
 }
 
+export function getTranslationLevelForExp(exp) {
+  const normalizedExp = Math.max(0, Number.parseInt(exp, 10) || 0);
+
+  if (normalizedExp < 100) {
+    return "beginner";
+  }
+
+  if (normalizedExp < 500) {
+    return "elementary";
+  }
+
+  if (normalizedExp < 2000) {
+    return "intermediate";
+  }
+
+  if (normalizedExp < 10000) {
+    return "advanced";
+  }
+
+  return "fluent";
+}
+
+export async function getUserLanguageExp({
+  userEmail,
+  targetLanguage,
+}) {
+  if (!hasMongoConfig()) {
+    return null;
+  }
+
+  const userEmailLower = normalizeEmail(userEmail);
+  const normalizedLanguage = normalizeWhitespace(targetLanguage);
+
+  if (!userEmailLower || !normalizedLanguage) {
+    return null;
+  }
+
+  await ensureLanguageStatsIndexes();
+  const db = await getMongoDatabase();
+  if (!db) {
+    return null;
+  }
+
+  const { userLanguageStats } = getCollectionNames();
+  const doc = await db.collection(userLanguageStats).findOne(
+    {
+      userEmailLower,
+      targetLanguage: normalizedLanguage,
+    },
+    {
+      projection: {
+        _id: 0,
+        exp: 1,
+      },
+    }
+  );
+
+  return Math.max(0, Number.parseInt(doc?.exp, 10) || 0);
+}
+
 export async function getPriorityWordsForPrompt({
   userEmail,
   targetLanguage,
