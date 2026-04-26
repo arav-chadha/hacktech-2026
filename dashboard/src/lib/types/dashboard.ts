@@ -13,6 +13,8 @@ export type VocabularySortBy =
   | "level"
   | "status";
 
+export type SemanticNodeKind = "anchor" | "learned-word";
+
 export interface StudyLanguage {
   code: string;
   label: string;
@@ -67,9 +69,65 @@ export interface VocabularyFilters {
   sortDirection: "asc" | "desc";
 }
 
+export interface SemanticProjectionMetadata {
+  algorithm: string;
+  dimensions: number;
+  randomSeed: number | null;
+}
+
+export type SemanticEmbeddingVector = number[];
+
+export interface SemanticAnchorNode {
+  id: string;
+  kind: "anchor";
+  label: string;
+  definition: string;
+  x: number;
+  y: number;
+  z: number;
+  embedding?: SemanticEmbeddingVector;
+  tags?: string[];
+  notes?: string;
+}
+
+export interface SemanticLearnedWordNode {
+  id: string;
+  kind: "learned-word";
+  label: string;
+  sourceWord: string;
+  learnedWord: string;
+  languageCode: string;
+  anchorId: string;
+  x: number;
+  y: number;
+  z: number;
+  embedding?: SemanticEmbeddingVector;
+  definition?: string;
+  status?: VocabularyStatus;
+  level?: LearningLevel;
+}
+
+export type SemanticGraphNode = SemanticAnchorNode | SemanticLearnedWordNode;
+
+export interface SemanticGraphLink {
+  source: string;
+  target: string;
+}
+
+export interface SemanticGraphSnapshot {
+  schemaVersion: number;
+  embeddingModel: string | null;
+  embeddingDimensions: number | null;
+  generatedAt: string | null;
+  projection: SemanticProjectionMetadata | null;
+  nodes: SemanticGraphNode[];
+  links: SemanticGraphLink[];
+}
+
 export interface DashboardRepository {
   getOverviewStats(range: ProgressRange): Promise<OverviewStats>;
   getVocabularyEntries(filters: VocabularyFilters): Promise<VocabularyEntry[]>;
+  getVocabularySemanticMap(): Promise<SemanticGraphSnapshot | null>;
   getStudySettings(): Promise<StudySettings>;
   updateStudySettings(input: StudySettings): Promise<StudySettings>;
   getAvailableLanguages(): Promise<StudyLanguage[]>;
