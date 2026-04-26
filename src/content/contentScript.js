@@ -787,6 +787,11 @@ function installAlignmentInteractions() {
         event.stopPropagation();
 
         if (activeLookupAnchor instanceof HTMLElement) {
+            void sendLanguageExp({
+                userEmail,
+                targetLanguage: activeSettings.selectedLanguage,
+                expAmount: -10,
+            });
             void playLookupAudio(activeLookupAnchor);
         }
     });
