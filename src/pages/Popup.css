@@ -93,6 +93,7 @@ body {
 .popup__field select {
     text-align: center;
     text-align-last: center;
+    color-scheme: dark;
     background-image:
         linear-gradient(45deg, transparent 50%, rgba(255, 255, 255, 0.72) 50%),
         linear-gradient(135deg, rgba(255, 255, 255, 0.72) 50%, transparent 50%);
@@ -102,6 +103,19 @@ body {
     background-size: 6px 6px, 6px 6px;
     background-repeat: no-repeat;
     padding-right: 28px;
+}
+
+.popup__readonly-field {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.07);
+    color: white;
+    padding: 12px 14px;
+    font: inherit;
+    font-weight: 600;
+    text-align: center;
+    text-transform: capitalize;
+    box-sizing: border-box;
 }
 
 .popup__field input[type="range"] {
@@ -119,8 +133,10 @@ body {
 }
 
 .popup__field option {
-    color: black;
+    background: #121827;
+    color: white;
     text-align: center;
+    margin: auto;
 }
 
 .popup__label-row {

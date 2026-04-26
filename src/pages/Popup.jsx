@@ -196,23 +196,16 @@ export default function Popup() {
         >
           <option value="spanish">Spanish</option>
           <option value="french">French</option>
+          <option value="mandarin">Mandarin</option>
+          <option value="russian">Russian</option>
         </select>
       </label>
 
-      <label className="popup__field" htmlFor="translation-level-select">
+      <label className="popup__field">
         <span>Level</span>
-        <select
-          id="translation-level-select"
-          name={TRANSLATION_LEVEL_STORAGE_KEY}
-          value={settings[TRANSLATION_LEVEL_STORAGE_KEY]}
-          disabled
-        >
-          <option value="beginner">Beginner</option>
-          <option value="elementary">Elementary</option>
-          <option value="intermediate">Intermediate</option>
-          <option value="advanced">Advanced</option>
-          <option value="fluent">Fluent</option>
-        </select>
+        <div className="popup__readonly-field">
+          {settings[TRANSLATION_LEVEL_STORAGE_KEY]}
+        </div>
         <div className="popup__exp-card" aria-live="polite">
           <div className="popup__exp-meta">
             <strong>{isLoadingProfile ? "Loading EXP..." : expProgress.progressLabel}</strong>

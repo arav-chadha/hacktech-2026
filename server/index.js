@@ -39,6 +39,8 @@ const ALIGNMENT_WORD_PATTERN = /[\p{L}\p{N}\p{M}'’-]+/gu;
 const TARGET_LANGUAGE_CODE_MAP = {
   spanish: "es",
   french: "fr",
+  mandarin: "ma",
+  russian: "ru",
 };
 
 const OPENAI_API_KEY =
