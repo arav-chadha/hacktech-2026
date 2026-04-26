@@ -454,6 +454,24 @@ async function getDashboardCollection(collectionKey) {
   return db.collection(collectionNames[collectionKey]);
 }
 
+async function getDashboardCollections(...collectionKeys) {
+  if (!hasMongoConfig()) {
+    return null;
+  }
+
+  await ensureMongoIndexes();
+  await ensureWordEmbeddingIndexes();
+  const db = await getMongoDatabase();
+  if (!db) {
+    return null;
+  }
+
+  const collectionNames = getCollectionNames();
+  return Object.fromEntries(
+    collectionKeys.map((collectionKey) => [collectionKey, db.collection(collectionNames[collectionKey])])
+  );
+}
+
 export function getDashboardLanguages() {
   return DASHBOARD_LANGUAGES.map(({ code, label, locale }) => ({
     code,
@@ -590,10 +608,11 @@ export async function getDashboardVocabularyEntries({
     return [];
   }
 
-  const collection = await getDashboardCollection("userWordStats");
-  if (!collection) {
+  const collections = await getDashboardCollections("userWordStats", "wordEmbeddings");
+  if (!collections) {
     return [];
   }
+  const { userWordStats: wordStatsCollection, wordEmbeddings: wordEmbeddingsCollection } = collections;
 
   const searchQuery = normalizeSearchQuery(filters?.searchQuery);
   const requestedLanguageCode = normalizeString(filters?.languageCode || "all");
@@ -622,7 +641,7 @@ export async function getDashboardVocabularyEntries({
     ];
   }
 
-  const documents = await collection
+  const documents = await wordStatsCollection
     .find(query, {
       projection: {
         _id: 1,
@@ -637,6 +656,52 @@ export async function getDashboardVocabularyEntries({
     })
     .toArray();
 
+  const embeddingDocuments = await wordEmbeddingsCollection
+    .find(
+      {
+        userEmailLower: normalizedEmail,
+        targetLanguage: { $in: allowedTargetLanguages },
+      },
+      {
+        projection: {
+          _id: 0,
+          targetLanguage: 1,
+          sourceWord: 1,
+          sourceWordNormalized: 1,
+          word: 1,
+          updatedAt: 1,
+          createdAt: 1,
+        },
+      }
+    )
+    .toArray();
+
+  const embeddingsBySourceKey = new Map();
+  for (const embeddingDocument of embeddingDocuments) {
+    const embeddingTargetLanguage = normalizeString(embeddingDocument?.targetLanguage);
+    const embeddingSourceWordNormalized =
+      normalizeString(embeddingDocument?.sourceWordNormalized).toLowerCase() ||
+      normalizeString(embeddingDocument?.sourceWord).toLowerCase();
+    const learnedWord = normalizeString(embeddingDocument?.word);
+
+    if (!embeddingTargetLanguage || !embeddingSourceWordNormalized || !learnedWord) {
+      continue;
+    }
+
+    const embeddingKey = `${embeddingTargetLanguage}::${embeddingSourceWordNormalized}`;
+    const existingEmbedding = embeddingsBySourceKey.get(embeddingKey);
+    const existingTimestamp = normalizeDate(existingEmbedding?.updatedAt)?.getTime() ??
+      normalizeDate(existingEmbedding?.createdAt)?.getTime() ??
+      0;
+    const nextTimestamp = normalizeDate(embeddingDocument?.updatedAt)?.getTime() ??
+      normalizeDate(embeddingDocument?.createdAt)?.getTime() ??
+      0;
+
+    if (!existingEmbedding || nextTimestamp >= existingTimestamp) {
+      embeddingsBySourceKey.set(embeddingKey, embeddingDocument);
+    }
+  }
+
   const entries = documents
     .map((document) => {
       const language = getLanguageMetadataFromStorageValue(document.targetLanguage);
@@ -646,11 +711,17 @@ export async function getDashboardVocabularyEntries({
 
       const status = buildStatus(document.clickCount);
       const level = sanitizedSettings.learningLevel;
+      const sourceWord = normalizeString(document.sourceWord);
+      const sourceWordNormalized =
+        normalizeString(document.sourceWordNormalized).toLowerCase() || sourceWord.toLowerCase();
+      const embeddingKey = `${normalizeString(document.targetLanguage)}::${sourceWordNormalized}`;
+      const embeddingDocument = embeddingsBySourceKey.get(embeddingKey);
+      const learnedWord = normalizeString(embeddingDocument?.word) || "Translation not captured yet";
 
       return {
         id: String(document._id),
-        sourceWord: normalizeString(document.sourceWord),
-        learnedWord: "Translation not captured yet",
+        sourceWord,
+        learnedWord,
         languageCode: language.code,
         languageLabel: language.label,
         level,
@@ -660,9 +731,13 @@ export async function getDashboardVocabularyEntries({
     })
     .filter(Boolean)
     .filter((entry) => {
+      const matchesQuery =
+        searchQuery.length === 0 ||
+        entry.sourceWord.toLowerCase().includes(searchQuery) ||
+        entry.learnedWord.toLowerCase().includes(searchQuery);
       const matchesLevel = requestedLevel === "all" || entry.level === requestedLevel;
       const matchesStatus = requestedStatus === "all" || entry.status === requestedStatus;
-      return matchesLevel && matchesStatus;
+      return matchesQuery && matchesLevel && matchesStatus;
     })
     .sort(
       buildVocabularySort({
