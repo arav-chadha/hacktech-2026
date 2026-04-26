@@ -22,6 +22,7 @@ import {
 } from "../src/shared/translationMarkup.js";
 import {
   getPriorityWordsForPrompt,
+  recordLanguageExp,
   recordTranslatedWordExp,
   recordWordFeedback,
 } from "./learningStore.js";
@@ -1198,6 +1199,29 @@ const server = http.createServer(async (request, response) => {
 
       if (!result.ok && !result.disabled) {
         sendJson(response, 400, { error: "userEmail, targetLanguage, and sourceTerm are required." });
+        return;
+      }
+
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendJson(response, 500, {
+        error: error?.message ?? String(error),
+      });
+    }
+    return;
+  }
+
+  if (request.url === "/language-exp" && request.method === "POST") {
+    try {
+      const body = await readJsonBody(request);
+      const result = await recordLanguageExp({
+        userEmail: body?.userEmail,
+        targetLanguage: body?.targetLanguage,
+        expAmount: body?.expAmount,
+      });
+
+      if (!result.ok && !result.disabled) {
+        sendJson(response, 400, { error: "userEmail, targetLanguage, and expAmount are required." });
         return;
       }
 

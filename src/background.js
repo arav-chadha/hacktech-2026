@@ -1,6 +1,7 @@
 const BACKEND_TRANSLATE_ENDPOINT = "http://127.0.0.1:8787/translate";
 const BACKEND_LOOKUP_WORD_ENDPOINT = "http://127.0.0.1:8787/lookup-word";
 const BACKEND_WORD_FEEDBACK_ENDPOINT = "http://127.0.0.1:8787/word-feedback";
+const BACKEND_LANGUAGE_EXP_ENDPOINT = "http://127.0.0.1:8787/language-exp";
 const BACKEND_SPEAK_WORD_ENDPOINT = "http://127.0.0.1:8787/speak-word";
 
 async function readNdjsonStream(response, onEvent) {
@@ -164,6 +165,25 @@ async function sendWordFeedback({ userEmail, targetLanguage, sourceTerm }) {
   }
 }
 
+async function sendLanguageExp({ userEmail, targetLanguage, expAmount }) {
+  const response = await fetch(BACKEND_LANGUAGE_EXP_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      userEmail,
+      targetLanguage,
+      expAmount,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Backend language exp failed (${response.status}): ${errorText}`);
+  }
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "translation-stream") {
     return;
@@ -224,6 +244,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then(() => sendResponse({ ok: true }))
       .catch((error) => {
         console.error("Word feedback failed:", error);
+        sendResponse({ error: error.message });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "LANGUAGE_EXP") {
+    sendLanguageExp(message.payload)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => {
+        console.error("Language exp failed:", error);
         sendResponse({ error: error.message });
       });
 

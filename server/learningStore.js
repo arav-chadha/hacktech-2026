@@ -141,15 +141,27 @@ export async function recordTranslatedWordExp({
   targetLanguage,
   translatedWordCount,
 }) {
+  return recordLanguageExp({
+    userEmail,
+    targetLanguage,
+    expAmount: translatedWordCount,
+  });
+}
+
+export async function recordLanguageExp({
+  userEmail,
+  targetLanguage,
+  expAmount,
+}) {
   if (!hasMongoConfig()) {
     return { ok: false, disabled: true, expAdded: 0 };
   }
 
   const userEmailLower = normalizeEmail(userEmail);
   const normalizedLanguage = normalizeWhitespace(targetLanguage);
-  const expToAdd = Math.max(0, Number.parseInt(translatedWordCount, 10) || 0);
+  const expDelta = Number.parseInt(expAmount, 10) || 0;
 
-  if (!userEmailLower || !normalizedLanguage || expToAdd <= 0) {
+  if (!userEmailLower || !normalizedLanguage || expDelta === 0) {
     return { ok: false, disabled: false, expAdded: 0 };
   }
 
@@ -167,24 +179,32 @@ export async function recordTranslatedWordExp({
       userEmailLower,
       targetLanguage: normalizedLanguage,
     },
-    {
-      $setOnInsert: {
-        createdAt: now,
-        userEmailLower,
-        targetLanguage: normalizedLanguage,
+    [
+      {
+        $set: {
+          createdAt: { $ifNull: ["$createdAt", now] },
+          userEmailLower: { $ifNull: ["$userEmailLower", userEmailLower] },
+          targetLanguage: { $ifNull: ["$targetLanguage", normalizedLanguage] },
+          updatedAt: now,
+          lastTranslatedAt: now,
+          exp: {
+            $max: [
+              0,
+              {
+                $add: [
+                  { $ifNull: ["$exp", 0] },
+                  expDelta,
+                ],
+              },
+            ],
+          },
+        },
       },
-      $set: {
-        updatedAt: now,
-        lastTranslatedAt: now,
-      },
-      $inc: {
-        exp: expToAdd,
-      },
-    },
+    ],
     {
       upsert: true,
     }
   );
 
-  return { ok: true, disabled: false, expAdded: expToAdd };
+  return { ok: true, disabled: false, expAdded: expDelta };
 }

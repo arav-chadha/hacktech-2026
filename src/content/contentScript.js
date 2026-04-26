@@ -734,6 +734,11 @@ function installAlignmentInteractions() {
         clearLookupHideTimeout();
         activeLookupHoverTimeout = window.setTimeout(() => {
             activeLookupHoverTimeout = null;
+            void sendLanguageExp({
+                userEmail,
+                targetLanguage: activeSettings.selectedLanguage,
+                expAmount: -10,
+            });
             void showLookupCardForToken(alignedToken);
         }, LOOKUP_HOVER_DELAY_MS);
     });
@@ -864,6 +869,47 @@ async function sendWordFeedback({
 
                 if (response?.error) {
                     console.error("Word feedback request failed:", response.error);
+                }
+
+                resolve();
+            }
+        );
+    });
+}
+
+async function sendLanguageExp({
+    userEmail,
+    targetLanguage,
+    expAmount,
+}) {
+    if (!userEmail || !targetLanguage || !expAmount) {
+        console.warn("Skipping language exp due to missing fields.", {
+            hasUserEmail: Boolean(userEmail),
+            hasTargetLanguage: Boolean(targetLanguage),
+            hasExpAmount: Boolean(expAmount),
+        });
+        return;
+    }
+
+    return new Promise((resolve) => {
+        chrome.runtime.sendMessage(
+            {
+                type: "LANGUAGE_EXP",
+                payload: {
+                    userEmail,
+                    targetLanguage,
+                    expAmount,
+                },
+            },
+            (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error("Failed to record language exp:", chrome.runtime.lastError);
+                    resolve();
+                    return;
+                }
+
+                if (response?.error) {
+                    console.error("Language exp request failed:", response.error);
                 }
 
                 resolve();
