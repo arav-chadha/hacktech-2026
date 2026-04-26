@@ -176,60 +176,93 @@ export default function Popup() {
 
   return (
     <form className="popup" onSubmit={handleSave}>
-      <img src="/icon-with-shadow.svg" alt="Language Extension icon" />
+      <div className="popup__brand-mark" aria-hidden="true">
+        <img src="/icon-with-shadow.svg" alt="" />
+      </div>
+
       <div className="popup__copy">
-        <h1>Language Extension</h1>
+        <span className="popup__eyebrow">WordLoom</span>
+        <h1>Everyday learning while you browse</h1>
         <p>
           {usesFullTranslation
-            ? "Fully translate the page into your target language."
-            : "Translate the page with difficulty automatically matched to your EXP."}
+            ? "Read in your target language with full-page support when you want a simpler session."
+            : "Reveal select words and phrases in context, with difficulty gently matched to your EXP."}
         </p>
       </div>
 
-      <label className="popup__field" htmlFor="language-select">
-        <span>Language</span>
-        <select
-          id="language-select"
-          name={LANGUAGE_STORAGE_KEY}
-          value={settings[LANGUAGE_STORAGE_KEY]}
-          onChange={handleFieldChange}
-        >
-          <option value="spanish">Spanish</option>
-          <option value="french">French</option>
-          <option value="mandarin">Mandarin</option>
-          <option value="russian">Russian</option>
-        </select>
-      </label>
+      <section className="popup__panel">
+        <div className="popup__panel-header">
+          <div>
+            <h2>Today’s setup</h2>
+            <p>Choose your language and let WordLoom pace the challenge for you.</p>
+          </div>
+          <span className="popup__badge">Trusted sync</span>
+        </div>
 
-      <label className="popup__field">
-        <span>Level</span>
-        <div className="popup__readonly-field">
-          {settings[TRANSLATION_LEVEL_STORAGE_KEY]}
-        </div>
-        <div className="popup__exp-card" aria-live="polite">
-          <div className="popup__exp-meta">
-            <strong>{isLoadingProfile ? "Loading EXP..." : expProgress.progressLabel}</strong>
-            <span>{isLoadingProfile ? "Syncing level from MongoDB..." : expProgress.nextLevelLabel}</span>
-          </div>
-          <div
-            className="popup__exp-bar"
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(expProgress.progressPercent)}
-            aria-label="Experience progress to next level"
+        <label className="popup__field" htmlFor="language-select">
+          <span>Language</span>
+          <select
+            id="language-select"
+            name={LANGUAGE_STORAGE_KEY}
+            value={settings[LANGUAGE_STORAGE_KEY]}
+            onChange={handleFieldChange}
           >
+            <option value="spanish">Spanish</option>
+            <option value="french">French</option>
+            <option value="mandarin">Mandarin</option>
+            <option value="russian">Russian</option>
+          </select>
+        </label>
+
+        <label className="popup__field">
+          <span>Current level</span>
+          <div className="popup__readonly-field">
+            {settings[TRANSLATION_LEVEL_STORAGE_KEY]}
+          </div>
+          <div className="popup__exp-card" aria-live="polite">
+            <div className="popup__exp-meta">
+              <strong>{isLoadingProfile ? "Loading EXP..." : expProgress.progressLabel}</strong>
+              <span>{isLoadingProfile ? "Syncing level..." : expProgress.nextLevelLabel}</span>
+            </div>
             <div
-              className="popup__exp-fill"
-              style={{ width: `${isLoadingProfile ? 0 : expProgress.progressPercent}%` }}
-            />
+              className="popup__exp-bar"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(expProgress.progressPercent)}
+              aria-label="Experience progress to next level"
+            >
+              <div
+                className="popup__exp-fill"
+                style={{ width: `${isLoadingProfile ? 0 : expProgress.progressPercent}%` }}
+              />
+            </div>
+          </div>
+        </label>
+      </section>
+
+      <section className="popup__panel popup__panel--soft">
+        <div className="popup__mini-grid">
+          <div>
+            <span className="popup__mini-label">How it feels</span>
+            <p className="popup__mini-copy">
+              Meanings stay tucked into the page until you interact, so learning feels calm instead of noisy.
+            </p>
+          </div>
+          <div>
+            <span className="popup__mini-label">What changes next</span>
+            <p className="popup__mini-copy">
+              As your EXP improves, WordLoom gradually introduces more target-language context.
+            </p>
           </div>
         </div>
-      </label>
+      </section>
 
       <button className="popup__button" type="submit" disabled={isSaving}>
-        {isSaving ? "Saving..." : "Save And Reload"}
+        {isSaving ? "Saving..." : "Save and refresh page"}
       </button>
+
+      <p className="popup__status" aria-live="polite">{status}</p>
     </form>
   );
 }

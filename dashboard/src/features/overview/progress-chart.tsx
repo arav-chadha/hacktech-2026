@@ -59,11 +59,11 @@ export function ProgressChart({
     <Card>
       <SectionHeading
         title="Daily progress"
-        description="Track daily discoveries and the longer-term growth of your vocabulary."
+        description="See what new reading moments uncovered and how your vocabulary has quietly compounded over time."
         action={<SegmentedControl value={range} options={RANGE_OPTIONS} onChange={onRangeChange} />}
       />
 
-      <div className="rounded-xl border border-ink-100 bg-ink-50/70 p-4">
+      <div className="rounded-2xl border border-ink-100 bg-oat-50 p-4">
         <svg viewBox={`0 0 ${width} ${height}`} className="h-64 w-full" role="img" aria-label="Progress chart">
           {[0, 1, 2, 3].map((step) => {
             const y = chartTop + (chartHeight / 3) * step;
@@ -74,7 +74,7 @@ export function ProgressChart({
                 x2={width}
                 y1={y}
                 y2={y}
-                stroke="#dbe4ee"
+                stroke="#e4d8c6"
                 strokeWidth="1"
                 strokeDasharray="4 6"
               />
@@ -93,31 +93,31 @@ export function ProgressChart({
                 width={Math.max(6, xStep * 0.4)}
                 height={barHeight}
                 rx="4"
-                fill={index === series.length - 1 ? "#2563eb" : "#cbd5e1"}
+                fill={index === series.length - 1 ? "#bd765e" : "#d8c1b0"}
               />
             );
           })}
 
-          {lineFillPath ? <path d={lineFillPath} fill="rgba(37, 99, 235, 0.08)" /> : null}
-          <path d={linePath} fill="none" stroke="#0f172a" strokeWidth="2.5" />
+          {lineFillPath ? <path d={lineFillPath} fill="rgba(189, 118, 94, 0.08)" /> : null}
+          <path d={linePath} fill="none" stroke="#533f36" strokeWidth="2.5" />
           {linePoints.length > 0 ? (
             <circle
               cx={linePoints[linePoints.length - 1]?.x ?? 0}
               cy={linePoints[linePoints.length - 1]?.y ?? 0}
               r="5"
-              fill="#0f172a"
+              fill="#533f36"
             />
           ) : null}
         </svg>
 
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-ink-500">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-ink-600">
           <div className="flex items-center gap-4">
             <span className="inline-flex items-center gap-2">
               <span className="h-2.5 w-2.5 rounded-full bg-accent-600" />
               Daily discoveries
             </span>
             <span className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-ink-900" />
+              <span className="h-2.5 w-2.5 rounded-full bg-ink-700" />
               Cumulative growth
             </span>
           </div>

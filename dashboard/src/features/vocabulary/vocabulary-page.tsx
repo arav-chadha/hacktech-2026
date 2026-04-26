@@ -190,11 +190,11 @@ export function VocabularyPage() {
   }
 
   return (
-    <div className="panel h-full min-h-[calc(100vh-2rem)] border-ink-200 bg-white p-6 sm:p-8">
+    <div className="panel h-full min-h-[calc(100vh-2rem)] bg-[var(--surface)] p-6 sm:p-8">
       <PageHeader
         eyebrow="Vocabulary"
-        title="Your learned words"
-        description="Search, filter, and manage your vocabulary with focused controls."
+        title="Your saved vocabulary"
+        description="Search, filter, and revisit the words WordLoom has surfaced while you read."
       />
 
       <Card className="mb-6">
@@ -323,7 +323,7 @@ export function VocabularyPage() {
 
       <Card>
         {selectedSemanticNode ? (
-          <div className="mb-5 rounded-xl border border-accent-100 bg-accent-50 px-4 py-3 text-sm text-accent-800">
+          <div className="mb-5 rounded-2xl border border-accent-100 bg-blush-50 px-4 py-3 text-sm text-accent-700">
             Table context is currently focused by the semantic map selection:
             {" "}
             <strong>{selectedSemanticNode.label}</strong>
@@ -336,7 +336,7 @@ export function VocabularyPage() {
         <div className="mt-5 overflow-x-auto">
           <table className="min-w-full border-separate border-spacing-0">
             <thead>
-              <tr className="text-left text-xs font-semibold uppercase tracking-[0.15em] text-ink-400">
+              <tr className="text-left text-xs font-semibold uppercase tracking-[0.15em] text-ink-500">
                 <th className="border-b border-ink-100 pb-3 pr-6">Source</th>
                 <th className="border-b border-ink-100 pb-3 pr-6">Learned word</th>
                 <th className="border-b border-ink-100 pb-3 pr-6">Language</th>
@@ -349,7 +349,7 @@ export function VocabularyPage() {
               {relatedSemanticEntries.map((entry) => (
                 <tr
                   key={entry.id}
-                  className="cursor-pointer text-sm text-ink-700 transition hover:bg-ink-50/80"
+                  className="cursor-pointer text-sm text-ink-700 transition hover:bg-oat-50"
                   onClick={() => {
                     const matchingNode = visibleSemanticMap?.nodes.find(
                       (node) =>
@@ -374,7 +374,7 @@ export function VocabularyPage() {
                     {formatDateLabel(entry.dateDiscovered)}
                   </td>
                   <td className="border-b border-ink-100 py-4">
-                    <span className="inline-flex rounded-full border border-ink-200 bg-ink-50 px-3 py-1 text-xs font-medium text-ink-700">
+                    <span className="inline-flex rounded-full border border-ink-200 bg-oat-50 px-3 py-1 text-xs font-medium text-ink-700">
                       {entry.status}
                     </span>
                   </td>
@@ -384,7 +384,7 @@ export function VocabularyPage() {
           </table>
 
           {relatedSemanticEntries.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-ink-200 bg-ink-50 px-6 py-10 text-center text-sm text-ink-500">
+            <div className="rounded-2xl border border-dashed border-ink-200 bg-oat-50 px-6 py-10 text-center text-sm text-ink-600">
               No words match the current search, filter set, and semantic-map selection.
             </div>
           ) : null}

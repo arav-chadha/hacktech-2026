@@ -6,8 +6,8 @@ import { AppShell } from "@/components/layout/app-shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Language Dashboard",
-  description: "Backend-connected learning dashboard for the language extension.",
+  title: "WordLoom Dashboard",
+  description: "A warm everyday learning dashboard for WordLoom.",
 };
 
 export default function RootLayout({

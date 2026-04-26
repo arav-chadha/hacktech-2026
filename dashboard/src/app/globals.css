@@ -4,13 +4,14 @@
 
 :root {
   color-scheme: light;
-  --background: #f4f6f8;
-  --surface: #ffffff;
-  --surface-muted: #f8fafc;
-  --border: #dbe4ee;
-  --border-strong: #c4d2e1;
-  --text: #0f172a;
-  --text-muted: #5f6b7a;
+  --background: #f8f3eb;
+  --surface: #fffdf8;
+  --surface-muted: #f4ede2;
+  --surface-soft: #fbf6ef;
+  --border: #e4d8c6;
+  --border-strong: #cdbba6;
+  --text: #261c18;
+  --text-muted: #6d5447;
 }
 
 * {
@@ -25,9 +26,9 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
-  background: #f4f6f8;
+  background: var(--background);
   color: var(--text);
-  font-family: "Segoe UI Variable", "Aptos", "Helvetica Neue", sans-serif;
+  font-family: "Avenir Next", "Segoe UI Variable", "Helvetica Neue", sans-serif;
 }
 
 a {
@@ -42,24 +43,28 @@ select {
 }
 
 ::selection {
-  background: #dbeafe;
-  color: #0f172a;
+  background: #e8c2b9;
+  color: #261c18;
 }
 
 @layer components {
   .panel {
-    @apply rounded-xl2 border border-ink-200 bg-white shadow-panel;
+    @apply rounded-xl2 border border-ink-200 bg-[var(--surface)] shadow-panel;
   }
 
   .field-label {
-    @apply mb-2 block text-sm font-medium text-ink-800;
+    @apply mb-2 block text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-ink-500;
   }
 
   .field-input {
-    @apply h-11 w-full rounded-xl border border-ink-300 bg-white px-3 text-sm text-ink-900 outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100;
+    @apply h-12 w-full rounded-xl border border-ink-200 bg-[var(--surface-soft)] px-4 text-sm text-ink-900 outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100;
   }
 
   .subtle-copy {
-    @apply text-sm leading-6 text-ink-500;
+    @apply text-sm leading-6 text-ink-600;
+  }
+
+  .soft-pill {
+    @apply inline-flex items-center rounded-full border border-ink-200 bg-oat-50 px-3 py-1 text-xs font-semibold tracking-[0.12em] text-ink-600;
   }
 }

@@ -45,11 +45,11 @@ export function OverviewPage() {
   }
 
   return (
-    <div className="panel h-full min-h-[calc(100vh-2rem)] border-ink-200 bg-white p-6 sm:p-8">
+    <div className="panel h-full min-h-[calc(100vh-2rem)] bg-[var(--surface)] p-6 sm:p-8">
       <PageHeader
         eyebrow="Overview"
-        title="Language growth overview"
-        description="Track your vocabulary expansion and learning progress over time."
+        title="Your everyday learning rhythm"
+        description="Follow the small reading moments, saved words, and steady progress that make WordLoom feel natural over time."
         aside={
           <div className="min-w-56">
             <label className="field-label" htmlFor="overview-language">
@@ -76,29 +76,61 @@ export function OverviewPage() {
         <StatCard
           label="Words learned"
           value={formatCompactNumber(stats.wordsLearned)}
-          supporting="Current cumulative vocabulary in the selected range."
+          supporting="Saved vocabulary currently active in your learning space."
         />
         <StatCard
           label="Discovered today"
           value={String(stats.discoveredToday)}
-          supporting="Fresh additions from reading and lightweight review."
+          supporting="Fresh finds from today’s browsing and lightweight review."
         />
         <StatCard
           label="Current streak"
           value={`${stats.streakDays} days`}
-          supporting="Consistent daily exposure is driving retention upward."
+          supporting="A gentle daily rhythm that keeps retention moving."
         />
         <StatCard
           label="Active level"
           value={stats.activeLevel}
-          supporting="Settings and review tone are aligned to this level."
+          supporting="WordLoom is tuning reveal depth and challenge to this stage."
         />
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(18rem,0.9fr)]">
         <ProgressChart range={range} series={stats.progressSeries} onRangeChange={setRange} />
+        <div className="grid gap-6">
+          <Card className="bg-oat-50">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent-700">
+              Daily note
+            </p>
+            <h2 className="mt-3 font-display text-[2rem] tracking-[-0.04em] text-ink-900">
+              Learning stays light when the next step is obvious.
+            </h2>
+            <p className="mt-3 text-sm leading-7 text-ink-600">
+              Keep browsing. WordLoom will reveal meaning on interaction,
+              save the words worth keeping, and gradually raise the reading challenge as your EXP grows.
+            </p>
+          </Card>
 
-              </div>
+          <Card>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink-500">
+              Recent activity
+            </p>
+            <div className="mt-5 space-y-4">
+              {stats.recentActivity.map((item) => (
+                <div key={item.id} className="rounded-2xl border border-ink-100 bg-[var(--surface-soft)] p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-base font-semibold text-ink-900">{item.title}</p>
+                      <p className="mt-2 text-sm leading-6 text-ink-600">{item.detail}</p>
+                    </div>
+                    <span className="soft-pill shrink-0">{item.dateLabel}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

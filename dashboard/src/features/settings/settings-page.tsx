@@ -34,11 +34,11 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="panel h-full min-h-[calc(100vh-2rem)] border-ink-200 bg-white p-6 sm:p-8">
+    <div className="panel h-full min-h-[calc(100vh-2rem)] bg-[var(--surface)] p-6 sm:p-8">
       <PageHeader
         eyebrow="Settings"
         title="Learning preferences"
-        description="Configure your study experience and learning behavior."
+        description="Shape how WordLoom shows language throughout the day, from your target language to the level of challenge you want in context."
       />
 
       <form className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(18rem,0.85fr)]" onSubmit={handleSubmit}>
@@ -60,8 +60,8 @@ export function SettingsPage() {
                   </option>
                 ))}
               </select>
-              <p className="mt-2 text-sm text-ink-500">
-                The dashboard and later article recommendations will align to this language.
+              <p className="mt-2 text-sm text-ink-600">
+                Your popup, dashboard, and future discovery suggestions all follow this study language.
               </p>
             </div>
 
@@ -82,8 +82,8 @@ export function SettingsPage() {
                 <option value="Intermediate">Intermediate</option>
                 <option value="Advanced">Advanced</option>
               </select>
-              <p className="mt-2 text-sm text-ink-500">
-                Use this to keep replacements and review tone matched to your actual reading comfort.
+              <p className="mt-2 text-sm text-ink-600">
+                WordLoom uses this to decide how much to translate, when to reveal support, and how advanced your reading should feel.
               </p>
             </div>
 
@@ -91,25 +91,31 @@ export function SettingsPage() {
               <Button type="submit" disabled={saving}>
                 {saving ? "Saving..." : "Save settings"}
               </Button>
-              <span className="text-sm text-ink-500">{status}</span>
+              <span className="text-sm text-ink-600">{status}</span>
             </div>
           </div>
         </Card>
 
-        <Card className="h-fit">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink-400">
+        <Card className="h-fit bg-oat-50">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent-700">
             Current profile
           </p>
           <div className="mt-5 space-y-5">
-            <div className="rounded-xl border border-ink-100 bg-ink-50 p-4">
-              <p className="text-sm font-medium text-ink-500">Language</p>
-              <p className="mt-2 text-lg font-semibold text-ink-900">
+            <div className="rounded-2xl border border-ink-100 bg-[var(--surface)] p-4">
+              <p className="text-sm font-medium text-ink-600">Language</p>
+              <p className="mt-2 font-display text-2xl tracking-[-0.03em] text-ink-900">
                 {languages.find((language) => language.code === formState.studyLanguageCode)?.label}
               </p>
             </div>
-            <div className="rounded-xl border border-ink-100 bg-ink-50 p-4">
-              <p className="text-sm font-medium text-ink-500">Level</p>
-              <p className="mt-2 text-lg font-semibold text-ink-900">{formState.learningLevel}</p>
+            <div className="rounded-2xl border border-ink-100 bg-[var(--surface)] p-4">
+              <p className="text-sm font-medium text-ink-600">Level</p>
+              <p className="mt-2 font-display text-2xl tracking-[-0.03em] text-ink-900">{formState.learningLevel}</p>
+            </div>
+            <div className="rounded-2xl border border-ink-100 bg-[var(--surface)] p-4">
+              <p className="text-sm font-medium text-ink-600">Experience style</p>
+              <p className="mt-2 text-sm leading-6 text-ink-600">
+                Calm support first, more independence later. The interface stays soft while the content grows with you.
+              </p>
             </div>
           </div>
         </Card>

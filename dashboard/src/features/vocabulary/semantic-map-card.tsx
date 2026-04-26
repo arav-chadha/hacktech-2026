@@ -97,10 +97,10 @@ type MapStyleState = {
 const ANCHOR_COLOR = "#94a3b8";
 
 const DEFAULT_LANGUAGE_COLORS: Record<string, string> = {
-  es: "#ef4444",
-  fr: "#2563eb",
-  de: "#f59e0b",
-  ja: "#10b981",
+  es: "#bd765e",
+  fr: "#8c7468",
+  de: "#b99059",
+  ja: "#6f9075",
 };
 
 const DEFAULT_MAP_STYLES: MapStyleState = {
@@ -348,11 +348,11 @@ function SemanticMapStylePanel({
   languageColorEntries: LanguageColorEntry[];
 }) {
   return (
-    <div className="mb-4 rounded-xl border border-ink-100 bg-white p-4">
+    <div className="mb-4 rounded-2xl border border-ink-100 bg-[var(--surface)] p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-ink-900">Map appearance</p>
-          <p className="mt-1 text-sm text-ink-500">
+          <p className="mt-1 text-sm text-ink-600">
             Tune persistent anchor text, point size, line weight, and camera framing. Hover labels
             stay separate from the always-on anchor labels.
           </p>
@@ -507,7 +507,7 @@ function SemanticMapStylePanel({
           />
         </label>
 
-        <label className="flex items-center gap-3 rounded-xl border border-ink-100 bg-ink-50 px-4 py-3 text-sm font-medium text-ink-700">
+        <label className="flex items-center gap-3 rounded-xl border border-ink-100 bg-oat-50 px-4 py-3 text-sm font-medium text-ink-700">
           <input
             type="checkbox"
             checked={mapStyles.showAnchorLabels}
@@ -521,7 +521,7 @@ function SemanticMapStylePanel({
           Show always-on anchor labels
         </label>
 
-        <label className="flex items-center gap-3 rounded-xl border border-ink-100 bg-ink-50 px-4 py-3 text-sm font-medium text-ink-700">
+        <label className="flex items-center gap-3 rounded-xl border border-ink-100 bg-oat-50 px-4 py-3 text-sm font-medium text-ink-700">
           <input
             type="checkbox"
             checked={mapStyles.showLearnedLabels}
@@ -541,7 +541,7 @@ function SemanticMapStylePanel({
           {languageColorEntries.map((entry) => (
             <label
               key={entry.code}
-              className="rounded-xl border border-ink-100 bg-ink-50 px-4 py-3 text-sm text-ink-700"
+              className="rounded-xl border border-ink-100 bg-oat-50 px-4 py-3 text-sm text-ink-700"
             >
               <span className="mb-2 block font-medium">{entry.label}</span>
               <input
@@ -556,7 +556,7 @@ function SemanticMapStylePanel({
                     },
                   }))
                 }
-                className="h-10 w-full rounded-lg border border-ink-200 bg-white"
+                className="h-10 w-full rounded-lg border border-ink-200 bg-[var(--surface)]"
               />
             </label>
           ))}
@@ -584,30 +584,30 @@ function SemanticNodeDetailsPanel({
   return (
     <div
       className={cn(
-        "rounded-xl border border-ink-100 bg-ink-50/50 p-5 overflow-y-auto",
+        "rounded-xl border border-ink-100 bg-oat-50 p-5 overflow-y-auto",
         mode === "modal" && "min-h-0 max-h-full"
       )}
     >
       {!selectedNode ? (
         <>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink-400">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink-500">
             Node details
           </p>
           <h3 className="mt-3 text-lg font-semibold text-ink-900">Select a node to inspect it</h3>
-          <p className="mt-3 text-sm leading-7 text-ink-500">
+          <p className="mt-3 text-sm leading-7 text-ink-600">
             Click any anchor or learned-word node to reveal its definition and nearby related
             vocabulary.
           </p>
         </>
       ) : (
         <>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink-400">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink-500">
             Node details
           </p>
           <div className="mt-3 flex items-start justify-between gap-4">
             <div>
               <h3 className="text-xl font-semibold text-ink-900">{selectedNode.label}</h3>
-              <p className="mt-2 text-sm text-ink-500">
+              <p className="mt-2 text-sm text-ink-600">
                 {selectedNode.kind === "anchor" ? "Anchor meaning" : "Learned word"}
               </p>
             </div>
@@ -615,8 +615,8 @@ function SemanticNodeDetailsPanel({
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-medium",
                 selectedNode.kind === "anchor"
-                  ? "border-accent-200 bg-accent-50 text-accent-700"
-                  : "border-ink-200 bg-white text-ink-700"
+                  ? "border-accent-100 bg-blush-50 text-accent-700"
+                  : "border-ink-200 bg-[var(--surface)] text-ink-700"
               )}
             >
               {selectedNode.kind === "anchor" ? "Anchor" : "Learned"}
@@ -630,7 +630,7 @@ function SemanticNodeDetailsPanel({
           </p>
 
           {selectedNode.kind === "learned-word" ? (
-            <div className="mt-4 rounded-xl border border-ink-100 bg-white p-4 text-sm text-ink-600">
+            <div className="mt-4 rounded-xl border border-ink-100 bg-[var(--surface)] p-4 text-sm text-ink-600">
               <div className="flex justify-between gap-3">
                 <span>Language</span>
                 <strong className="text-ink-900">
@@ -658,7 +658,7 @@ function SemanticNodeDetailsPanel({
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               {relatedLearnedNodes.length === 0 ? (
-                <p className="text-sm leading-6 text-ink-500">
+                <p className="text-sm leading-6 text-ink-600">
                   No learned-word nodes are linked to this area yet.
                 </p>
               ) : (
@@ -667,7 +667,7 @@ function SemanticNodeDetailsPanel({
                     key={node.id}
                     type="button"
                     onClick={() => onSelectNode(node)}
-                    className="rounded-full border border-ink-200 bg-white px-3 py-1 text-sm text-ink-700 transition hover:border-ink-300 hover:text-ink-900"
+                    className="rounded-full border border-ink-200 bg-[var(--surface)] px-3 py-1 text-sm text-ink-700 transition hover:border-ink-300 hover:text-ink-900"
                   >
                     {node.learnedWord}
                   </button>
@@ -834,7 +834,7 @@ function SemanticGraphCanvas({
   }, [graphData]);
 
   return (
-    <div ref={containerRef} className="flex-1 overflow-hidden rounded-xl border border-ink-100 bg-white">
+    <div ref={containerRef} className="flex-1 overflow-hidden rounded-xl border border-ink-100 bg-[var(--surface)]">
       <ForceGraph3D
         ref={graphRef}
         graphData={graphData}
@@ -843,7 +843,7 @@ function SemanticGraphCanvas({
         numDimensions={3}
         cooldownTicks={120}
         warmupTicks={80}
-        backgroundColor="#ffffff"
+        backgroundColor="#fffdf8"
         enableNodeDrag
         showNavInfo={false}
         enableNavigationControls={true}
@@ -908,7 +908,7 @@ function SemanticGraphCanvas({
               isMultiline = true;
             }
             
-            const sprite = buildTextSprite(labelText, fontSize, "#0f172a", isMultiline);
+            const sprite = buildTextSprite(labelText, fontSize, "#261c18", isMultiline);
 
             if (sprite) {
               // Position label on top of the sphere with offset
@@ -976,7 +976,7 @@ function SemanticMapViewport({
         ? "min-h-0 xl:grid-cols-[minmax(0,1.8fr)_minmax(22rem,0.72fr)]"
         : "xl:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)]"
     )}>
-      <div className="flex min-h-0 flex-col rounded-xl border border-ink-100 bg-ink-50/60 p-3">
+      <div className="flex min-h-0 flex-col rounded-xl border border-ink-100 bg-oat-50 p-3">
         <SemanticMapToolbar
           languageColorEntries={languageColorEntries}
           isStylePanelOpen={isStylePanelOpen}
@@ -1059,9 +1059,9 @@ function SemanticMapInlineCard(props: {
       />
 
       {!graphData ? (
-        <div className="rounded-xl border border-dashed border-ink-200 bg-ink-50 px-6 py-12">
+        <div className="rounded-2xl border border-dashed border-ink-200 bg-oat-50 px-6 py-12">
           <h3 className="text-lg font-semibold text-ink-900">Semantic graph data is not available yet</h3>
-          <p className="mt-3 max-w-2xl text-sm leading-7 text-ink-500">
+          <p className="mt-3 max-w-2xl text-sm leading-7 text-ink-600">
             The dashboard is now reading live data from the Node backend, but semantic graph and
             embedding responses have not been implemented there yet. This empty state is the
             intentional placeholder for that future API.
@@ -1158,7 +1158,7 @@ function SemanticMapOverlay(props: {
       >
         <Card className="flex h-full flex-col p-4">
           {/* Filter Bar */}
-          <div className="mb-4 rounded-xl border border-ink-100 bg-ink-50/60 p-4">
+          <div className="mb-4 rounded-2xl border border-ink-100 bg-oat-50 p-4">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
               <div className="xl:col-span-2">
                 <label className="field-label" htmlFor="vocabulary-search-fs">
