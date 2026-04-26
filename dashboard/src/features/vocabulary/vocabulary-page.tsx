@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useDashboard } from "@/components/providers/dashboard-provider";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
@@ -26,12 +26,25 @@ const DEFAULT_FILTERS: VocabularyFilters = {
 };
 
 export function VocabularyPage() {
-  const { repository, languages } = useDashboard();
+  const { repository, languages, settings } = useDashboard();
   const [filters, setFilters] = useState<VocabularyFilters>(DEFAULT_FILTERS);
   const [entries, setEntries] = useState<VocabularyEntry[]>([]);
   const [semanticMap, setSemanticMap] = useState<SemanticGraphSnapshot | null>(null);
   const [selectedSemanticNode, setSelectedSemanticNode] = useState<SemanticGraphNode | null>(null);
+  const [didInitializeLanguage, setDidInitializeLanguage] = useState(false);
   const deferredSearch = useDeferredValue(filters.searchQuery);
+
+  useEffect(() => {
+    if (didInitializeLanguage || !settings?.studyLanguageCode) {
+      return;
+    }
+
+    setFilters((current) => ({
+      ...current,
+      languageCode: settings.studyLanguageCode,
+    }));
+    setDidInitializeLanguage(true);
+  }, [didInitializeLanguage, settings?.studyLanguageCode]);
 
   useEffect(() => {
     let isActive = true;
@@ -88,16 +101,93 @@ export function VocabularyPage() {
           )
         : entries;
 
+  const languageLabels = useMemo(
+    () => Object.fromEntries(languages.map((language) => [language.code, language.label])),
+    [languages]
+  );
+
+  const visibleSemanticMap = useMemo(() => {
+    if (!semanticMap) {
+      return null;
+    }
+
+    const visibleEntryKeys = new Set(
+      entries.map(
+        (entry) =>
+          `${entry.languageCode}::${entry.sourceWord.toLowerCase()}::${entry.learnedWord.toLowerCase()}`
+      )
+    );
+
+    const visibleNodes = semanticMap.nodes.filter((node) => {
+      if (node.kind === "anchor") {
+        return true;
+      }
+
+      return visibleEntryKeys.has(
+        `${node.languageCode}::${node.sourceWord.toLowerCase()}::${node.learnedWord.toLowerCase()}`
+      );
+    });
+
+    const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
+    const visibleLinks = semanticMap.links.filter(
+      (link) => visibleNodeIds.has(link.source) && visibleNodeIds.has(link.target)
+    );
+
+    return {
+      ...semanticMap,
+      nodes: visibleNodes,
+      links: visibleLinks,
+    };
+  }, [entries, semanticMap]);
+
+  useEffect(() => {
+    if (!visibleSemanticMap || !selectedSemanticNode) {
+      return;
+    }
+
+    const stillVisible = visibleSemanticMap.nodes.some((node) => node.id === selectedSemanticNode.id);
+    if (!stillVisible) {
+      setSelectedSemanticNode(null);
+    }
+  }, [selectedSemanticNode, visibleSemanticMap]);
+
+  useEffect(() => {
+    if (!visibleSemanticMap || deferredSearch.trim().length === 0) {
+      return;
+    }
+
+    const query = deferredSearch.trim().toLowerCase();
+    const nextNode =
+      visibleSemanticMap.nodes.find((node) => node.label.toLowerCase() === query) ??
+      visibleSemanticMap.nodes.find(
+        (node) =>
+          node.kind === "learned-word" &&
+          (
+            node.learnedWord.toLowerCase() === query ||
+            node.sourceWord.toLowerCase() === query
+          )
+      ) ??
+      visibleSemanticMap.nodes.find((node) => node.label.toLowerCase().includes(query)) ??
+      visibleSemanticMap.nodes.find(
+        (node) =>
+          node.kind === "learned-word" &&
+          (
+            node.learnedWord.toLowerCase().includes(query) ||
+            node.sourceWord.toLowerCase().includes(query)
+          )
+      );
+
+    if (nextNode) {
+      setSelectedSemanticNode(nextNode);
+    }
+  }, [deferredSearch, visibleSemanticMap]);
+
   function updateFilter<K extends keyof VocabularyFilters>(key: K, value: VocabularyFilters[K]) {
     setFilters((current) => ({
       ...current,
       [key]: value,
     }));
   }
-
-  const languageLabels = Object.fromEntries(
-    languages.map((language) => [language.code, language.label])
-  );
 
   return (
     <div className="panel h-full min-h-[calc(100vh-2rem)] border-ink-200 bg-white p-6 sm:p-8">
@@ -107,27 +197,7 @@ export function VocabularyPage() {
         description="Use this table as the dependable source of truth for what has already entered your study loop. Search fast, sort clearly, and keep the controls close to the data."
       />
 
-      <div className="mb-6">
-        <SemanticMapCard
-          snapshot={semanticMap}
-          selectedNodeId={selectedSemanticNode?.id ?? null}
-          languageLabels={languageLabels}
-          onSelectNode={setSelectedSemanticNode}
-        />
-      </div>
-
-      <Card>
-        {selectedSemanticNode ? (
-          <div className="mb-5 rounded-xl border border-accent-100 bg-accent-50 px-4 py-3 text-sm text-accent-800">
-            Table context is currently focused by the semantic map selection:
-            {" "}
-            <strong>{selectedSemanticNode.label}</strong>
-            {selectedSemanticNode.kind === "anchor"
-              ? " and its linked learned words."
-              : " and its matching vocabulary row."}
-          </div>
-        ) : null}
-
+      <Card className="mb-6">
         <div className="grid gap-4 border-b border-ink-100 pb-5 md:grid-cols-2 xl:grid-cols-5">
           <div className="xl:col-span-2">
             <label className="field-label" htmlFor="vocabulary-search">
@@ -201,7 +271,7 @@ export function VocabularyPage() {
           </div>
         </div>
 
-        <div className="mt-5 flex flex-col gap-3 border-b border-ink-100 pb-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <label className="field-label mb-0" htmlFor="vocabulary-sort">
               Sort by
@@ -232,6 +302,28 @@ export function VocabularyPage() {
           </div>
           <p className="text-sm text-ink-500">{relatedSemanticEntries.length} words in this view</p>
         </div>
+      </Card>
+
+      <div className="mb-6">
+        <SemanticMapCard
+          snapshot={visibleSemanticMap}
+          selectedNodeId={selectedSemanticNode?.id ?? null}
+          languageLabels={languageLabels}
+          onSelectNode={setSelectedSemanticNode}
+        />
+      </div>
+
+      <Card>
+        {selectedSemanticNode ? (
+          <div className="mb-5 rounded-xl border border-accent-100 bg-accent-50 px-4 py-3 text-sm text-accent-800">
+            Table context is currently focused by the semantic map selection:
+            {" "}
+            <strong>{selectedSemanticNode.label}</strong>
+            {selectedSemanticNode.kind === "anchor"
+              ? " and its linked learned words."
+              : " and its matching vocabulary row."}
+          </div>
+        ) : null}
 
         <div className="mt-5 overflow-x-auto">
           <table className="min-w-full border-separate border-spacing-0">
@@ -247,7 +339,23 @@ export function VocabularyPage() {
             </thead>
             <tbody>
               {relatedSemanticEntries.map((entry) => (
-                <tr key={entry.id} className="text-sm text-ink-700">
+                <tr
+                  key={entry.id}
+                  className="cursor-pointer text-sm text-ink-700 transition hover:bg-ink-50/80"
+                  onClick={() => {
+                    const matchingNode = visibleSemanticMap?.nodes.find(
+                      (node) =>
+                        node.kind === "learned-word" &&
+                        node.languageCode === entry.languageCode &&
+                        node.sourceWord.toLowerCase() === entry.sourceWord.toLowerCase() &&
+                        node.learnedWord.toLowerCase() === entry.learnedWord.toLowerCase()
+                    );
+
+                    if (matchingNode) {
+                      setSelectedSemanticNode(matchingNode);
+                    }
+                  }}
+                >
                   <td className="border-b border-ink-100 py-4 pr-6 font-medium text-ink-900">
                     {entry.sourceWord}
                   </td>
