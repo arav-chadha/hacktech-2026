@@ -214,8 +214,8 @@ export function loadSemanticGraphSnapshot(): SemanticGraphSnapshot | null {
     return null;
   }
 
-  // BACKEND_INTEGRATION: Replace local snapshot merging and client-side link derivation with a
-  // backend semantic-graph payload once vocabulary embeddings and neighborhood links are served.
+  // This local snapshot helper remains available for offline semantic-map development,
+  // but the live dashboard now asks the Node backend for semantic graph data.
   const links = buildLinks(nodes);
 
   return {

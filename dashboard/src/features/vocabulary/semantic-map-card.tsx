@@ -1060,11 +1060,11 @@ function SemanticMapInlineCard(props: {
 
       {!graphData ? (
         <div className="rounded-xl border border-dashed border-ink-200 bg-ink-50 px-6 py-12">
-          <h3 className="text-lg font-semibold text-ink-900">No semantic snapshot imported yet</h3>
+          <h3 className="text-lg font-semibold text-ink-900">Semantic graph data is not available yet</h3>
           <p className="mt-3 max-w-2xl text-sm leading-7 text-ink-500">
-            Populate `dashboard/semantic-data/*.input.json`, run the Python generator, and write
-            the resulting snapshots into the semantic snapshot files. Until then, this map stays
-            intentionally empty.
+            The dashboard is now reading live data from the Node backend, but semantic graph and
+            embedding responses have not been implemented there yet. This empty state is the
+            intentional placeholder for that future API.
           </p>
         </div>
       ) : (

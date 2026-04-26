@@ -4,6 +4,7 @@ import { MONGODB_DB_NAME, MONGODB_URI } from "./local-config.js";
 const USER_WORD_STATS_COLLECTION = "user_word_stats";
 const USER_LANGUAGE_STATS_COLLECTION = "user_language_stats";
 const WORD_EMBEDDINGS_COLLECTION = "word_embeddings";
+const DASHBOARD_USER_SETTINGS_COLLECTION = "dashboard_user_settings";
 
 let mongoClientPromise = null;
 let wordIndexesPromise = null;
@@ -69,9 +70,10 @@ export async function ensureMongoIndexes() {
     }
 
     await ensureCollectionExists(db, USER_WORD_STATS_COLLECTION);
+    await ensureCollectionExists(db, DASHBOARD_USER_SETTINGS_COLLECTION);
 
-    const collection = db.collection(USER_WORD_STATS_COLLECTION);
-    const desiredIndexes = [
+    const userWordStatsCollection = db.collection(USER_WORD_STATS_COLLECTION);
+    const userWordStatsIndexes = [
       {
         key: {
           userEmailLower: 1,
@@ -92,25 +94,41 @@ export async function ensureMongoIndexes() {
       },
     ];
 
-    const existingIndexes = await collection.indexes();
-    const existingByName = new Map(existingIndexes.map((index) => [index.name, index]));
+    const dashboardUserSettingsCollection = db.collection(DASHBOARD_USER_SETTINGS_COLLECTION);
+    const dashboardUserSettingsIndexes = [
+      {
+        key: {
+          userEmailLower: 1,
+        },
+        unique: true,
+        name: "dashboard_user_unique",
+      },
+    ];
 
-    for (const desiredIndex of desiredIndexes) {
-      const existingIndex = existingByName.get(desiredIndex.name);
-      if (!existingIndex) {
-        continue;
+    async function ensureIndexes(collection, desiredIndexes) {
+      const existingIndexes = await collection.indexes();
+      const existingByName = new Map(existingIndexes.map((index) => [index.name, index]));
+
+      for (const desiredIndex of desiredIndexes) {
+        const existingIndex = existingByName.get(desiredIndex.name);
+        if (!existingIndex) {
+          continue;
+        }
+
+        const sameKey =
+          JSON.stringify(existingIndex.key) === JSON.stringify(desiredIndex.key);
+        const sameUniqueness = Boolean(existingIndex.unique) === Boolean(desiredIndex.unique);
+
+        if (!sameKey || !sameUniqueness) {
+          await collection.dropIndex(desiredIndex.name);
+        }
       }
 
-      const sameKey =
-        JSON.stringify(existingIndex.key) === JSON.stringify(desiredIndex.key);
-      const sameUniqueness = Boolean(existingIndex.unique) === Boolean(desiredIndex.unique);
-
-      if (!sameKey || !sameUniqueness) {
-        await collection.dropIndex(desiredIndex.name);
-      }
+      await collection.createIndexes(desiredIndexes);
     }
 
-    await collection.createIndexes(desiredIndexes);
+    await ensureIndexes(userWordStatsCollection, userWordStatsIndexes);
+    await ensureIndexes(dashboardUserSettingsCollection, dashboardUserSettingsIndexes);
   })().catch((error) => {
     wordIndexesPromise = null;
     throw error;
@@ -245,5 +263,6 @@ export function getCollectionNames() {
     wordEmbeddings: WORD_EMBEDDINGS_COLLECTION,
     userLanguageStats: USER_LANGUAGE_STATS_COLLECTION,
     userWordStats: USER_WORD_STATS_COLLECTION,
+    dashboardUserSettings: DASHBOARD_USER_SETTINGS_COLLECTION,
   };
 }

@@ -34,6 +34,21 @@ import {
   getMongoDatabase,
   hasMongoConfig,
 } from "./mongo.js";
+import {
+  clearDashboardSessionCookie,
+  getDashboardSessionFromRequest,
+  setDashboardSessionCookie,
+  verifyGoogleDashboardCredential,
+} from "./dashboardAuth.js";
+import { resolveDashboardOrigin } from "./dashboardConfig.js";
+import {
+  getDashboardLanguages,
+  getDashboardOverview,
+  getDashboardSettings,
+  getDashboardVocabularyEntries,
+  sanitizeDashboardSettings,
+  upsertDashboardSettings,
+} from "./dashboardStore.js";
 
 
 const SERVER_HOST = "127.0.0.1";
@@ -49,10 +64,16 @@ const TARGET_LANGUAGE_CODE_MAP = {
 };
 
 const OPENAI_API_KEY =
-  process.env.OPENAI_API_KEY?.trim() || localConfig.LOCAL_OPENAI_API_KEY?.trim() || "";
+  process.env.OPENAI_API_KEY?.trim() ||
+  localConfig.LOCAL_OPENAI_API_KEY?.trim() ||
+  localConfig.OPENAI_API_KEY?.trim() ||
+  "";
 const openAIClient = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 const ELEVENLABS_API_KEY =
-  process.env.ELEVENLABS_API_KEY?.trim() || localConfig.LOCAL_ELEVENLABS_API_KEY?.trim() || "";
+  process.env.ELEVENLABS_API_KEY?.trim() ||
+  localConfig.LOCAL_ELEVENLABS_API_KEY?.trim() ||
+  localConfig.ELEVENLABS_API_KEY?.trim() ||
+  "";
 const ELEVENLABS_VOICE_ID =
   process.env.ELEVENLABS_VOICE_ID?.trim() || localConfig.LOCAL_ELEVENLABS_VOICE_ID?.trim() || "JBFqnCBsd6RMkjVDRZzb";
 const ELEVENLABS_MODEL_ID =
@@ -66,6 +87,62 @@ function sendJson(response, statusCode, payload) {
     "Content-Type": "application/json",
   });
   response.end(JSON.stringify(payload));
+}
+
+function setDashboardCorsHeaders(response, requestOrigin) {
+  const allowedOrigin = resolveDashboardOrigin(requestOrigin);
+  if (!allowedOrigin) {
+    return false;
+  }
+
+  response.setHeader("Access-Control-Allow-Credentials", "true");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  response.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  response.setHeader("Vary", "Origin");
+  return true;
+}
+
+function sendDashboardJson(response, requestOrigin, statusCode, payload) {
+  if (!setDashboardCorsHeaders(response, requestOrigin)) {
+    response.writeHead(403, {
+      "Content-Type": "application/json",
+    });
+    response.end(JSON.stringify({ error: "Dashboard origin is not allowed." }));
+    return;
+  }
+
+  response.writeHead(statusCode, {
+    "Content-Type": "application/json",
+  });
+  response.end(JSON.stringify(payload));
+}
+
+function sendDashboardNoContent(response, requestOrigin, statusCode = 204) {
+  if (!setDashboardCorsHeaders(response, requestOrigin)) {
+    response.writeHead(403);
+    response.end();
+    return;
+  }
+
+  response.writeHead(statusCode);
+  response.end();
+}
+
+function getRequestUrl(request) {
+  return new URL(request.url, `http://${SERVER_HOST}:${SERVER_PORT}`);
+}
+
+function getDashboardSessionOrReject(request, response, requestOrigin) {
+  const session = getDashboardSessionFromRequest(request);
+  if (!session) {
+    sendDashboardJson(response, requestOrigin, 401, {
+      error: "Dashboard authentication is required.",
+    });
+    return null;
+  }
+
+  return session;
 }
 
 function delay(ms) {
@@ -908,6 +985,154 @@ async function readJsonBody(request) {
   return rawBody ? JSON.parse(rawBody) : {};
 }
 
+async function handleDashboardRequest({
+  request,
+  response,
+  pathname,
+  requestUrl,
+  requestOrigin,
+}) {
+  if (request.method === "OPTIONS") {
+    sendDashboardNoContent(response, requestOrigin);
+    return true;
+  }
+
+  if (pathname === "/dashboard/auth/google" && request.method === "POST") {
+    try {
+      const body = await readJsonBody(request);
+      const verifiedUser = await verifyGoogleDashboardCredential({
+        accessToken: body?.accessToken,
+        idToken: body?.idToken,
+      });
+
+      setDashboardSessionCookie(response, verifiedUser.email);
+      sendDashboardJson(response, requestOrigin, 200, {
+        ok: true,
+        session: {
+          email: verifiedUser.email,
+        },
+      });
+    } catch (error) {
+      sendDashboardJson(response, requestOrigin, 401, {
+        error: error?.message ?? "Google sign-in failed.",
+      });
+    }
+
+    return true;
+  }
+
+  if (pathname === "/dashboard/auth/me" && request.method === "GET") {
+    const session = getDashboardSessionOrReject(request, response, requestOrigin);
+    if (!session) {
+      return true;
+    }
+
+    sendDashboardJson(response, requestOrigin, 200, {
+      session: {
+        email: session.email,
+      },
+    });
+    return true;
+  }
+
+  if (pathname === "/dashboard/auth/logout" && request.method === "POST") {
+    clearDashboardSessionCookie(response);
+    sendDashboardJson(response, requestOrigin, 200, {
+      ok: true,
+    });
+    return true;
+  }
+
+  const session = getDashboardSessionOrReject(request, response, requestOrigin);
+  if (!session) {
+    return true;
+  }
+
+  if (pathname === "/dashboard/languages" && request.method === "GET") {
+    sendDashboardJson(response, requestOrigin, 200, {
+      languages: getDashboardLanguages(),
+    });
+    return true;
+  }
+
+  if (pathname === "/dashboard/settings" && request.method === "GET") {
+    const settings = await getDashboardSettings({
+      userEmail: session.email,
+    });
+
+    sendDashboardJson(response, requestOrigin, 200, {
+      settings,
+    });
+    return true;
+  }
+
+  if (pathname === "/dashboard/settings" && request.method === "PUT") {
+    const body = await readJsonBody(request);
+    const settings = await upsertDashboardSettings({
+      userEmail: session.email,
+      settings: sanitizeDashboardSettings(body?.settings),
+    });
+
+    sendDashboardJson(response, requestOrigin, 200, {
+      settings,
+    });
+    return true;
+  }
+
+  if (pathname === "/dashboard/overview" && request.method === "GET") {
+    const range = String(requestUrl.searchParams.get("range") ?? "30d");
+    const settings = await getDashboardSettings({
+      userEmail: session.email,
+    });
+    const overview = await getDashboardOverview({
+      userEmail: session.email,
+      range: ["7d", "30d", "90d", "all"].includes(range) ? range : "30d",
+      settings,
+    });
+
+    sendDashboardJson(response, requestOrigin, 200, {
+      overview,
+    });
+    return true;
+  }
+
+  if (pathname === "/dashboard/vocabulary" && request.method === "GET") {
+    const settings = await getDashboardSettings({
+      userEmail: session.email,
+    });
+    const entries = await getDashboardVocabularyEntries({
+      userEmail: session.email,
+      settings,
+      filters: {
+        searchQuery: requestUrl.searchParams.get("searchQuery") ?? "",
+        languageCode: requestUrl.searchParams.get("languageCode") ?? "all",
+        level: requestUrl.searchParams.get("level") ?? "all",
+        status: requestUrl.searchParams.get("status") ?? "all",
+        sortBy: requestUrl.searchParams.get("sortBy") ?? "dateDiscovered",
+        sortDirection: requestUrl.searchParams.get("sortDirection") ?? "desc",
+      },
+    });
+
+    sendDashboardJson(response, requestOrigin, 200, {
+      entries,
+    });
+    return true;
+  }
+
+  if (pathname === "/dashboard/semantic-map" && request.method === "GET") {
+    sendDashboardJson(response, requestOrigin, 200, {
+      snapshot: null,
+      message: "Semantic graph data is not available from the backend yet.",
+    });
+    return true;
+  }
+
+  sendDashboardJson(response, requestOrigin, 404, {
+    error: "Dashboard route not found.",
+  });
+  return true;
+}
+
 async function requestOpenAIJson(prompt, payload) {
   if (!openAIClient) {
     throw new Error("Missing OpenAI API key. Set OPENAI_API_KEY or LOCAL_OPENAI_API_KEY.");
@@ -1308,6 +1533,31 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
+  const requestUrl = getRequestUrl(request);
+  const pathname = requestUrl.pathname;
+  const requestOrigin = request.headers.origin;
+
+  if (pathname.startsWith("/dashboard/")) {
+    try {
+      const handledDashboardRequest = await handleDashboardRequest({
+        request,
+        response,
+        pathname,
+        requestUrl,
+        requestOrigin,
+      });
+
+      if (handledDashboardRequest) {
+        return;
+      }
+    } catch (error) {
+      sendDashboardJson(response, requestOrigin, 500, {
+        error: error?.message ?? "Dashboard request failed.",
+      });
+      return;
+    }
+  }
+
   if (request.method === "OPTIONS") {
     response.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
@@ -1318,7 +1568,7 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
-  if (request.url === "/health" && request.method === "GET") {
+  if (pathname === "/health" && request.method === "GET") {
     sendJson(response, 200, { ok: true, mongoEnabled: hasMongoConfig() });
     return;
   }
@@ -1556,7 +1806,7 @@ const server = http.createServer(async (request, response) => {
     }
   }
 
-  if (request.url === "/speak-word" && request.method === "POST") {
+  if (pathname === "/speak-word" && request.method === "POST") {
     try {
       const body = await readJsonBody(request);
       const word = String(body?.word ?? "").trim();
@@ -1585,7 +1835,7 @@ const server = http.createServer(async (request, response) => {
     }
   }
 
-  if (request.url !== "/translate" || request.method !== "POST") {
+  if (pathname !== "/translate" || request.method !== "POST") {
     sendJson(response, 404, { error: "Not found." });
     return;
   }

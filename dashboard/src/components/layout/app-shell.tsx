@@ -3,7 +3,10 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useDashboardAuth } from "@/components/providers/dashboard-auth-provider";
 import { useDashboard } from "@/components/providers/dashboard-provider";
+import { Button } from "@/components/ui/button";
+import { AuthRequiredState } from "@/components/ui/auth-required-state";
 import { LoadingState } from "@/components/ui/loading-state";
 import { cn } from "@/lib/utils/cn";
 
@@ -16,11 +19,38 @@ const NAV_ITEMS = [
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const auth = useDashboardAuth();
   const { ready, languages, settings } = useDashboard();
   const activeLanguage = languages.find((entry) => entry.code === settings?.studyLanguageCode);
 
+  if (auth.loading) {
+    return (
+      <LoadingState
+        title="Checking your dashboard session"
+        description="Verifying your Google sign-in and restoring the secure backend session."
+      />
+    );
+  }
+
+  if (!auth.email) {
+    return (
+      <AuthRequiredState
+        error={auth.error}
+        loading={auth.loading}
+        onSignIn={() => {
+          void auth.signIn();
+        }}
+      />
+    );
+  }
+
   if (!ready || !settings) {
-    return <LoadingState />;
+    return (
+      <LoadingState
+        title="Loading your study space"
+        description="Pulling your Mongo-backed settings, vocabulary history, and dashboard metadata."
+      />
+    );
   }
 
   return (
@@ -37,7 +67,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </h1>
             </div>
             <div className="rounded-full border border-accent-100 bg-accent-50 px-3 py-1 text-xs font-medium text-accent-700">
-              Local-only
+              Connected
             </div>
           </div>
 
@@ -72,7 +102,23 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <p className="text-lg font-semibold text-ink-900">{activeLanguage?.label}</p>
                 <p className="mt-1 text-sm text-ink-500">{settings.learningLevel} level</p>
               </div>
-                          </div>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-xl border border-ink-200 bg-white p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink-400">
+              Signed in
+            </p>
+            <p className="mt-3 break-all text-sm font-medium text-ink-900">{auth.email}</p>
+            <Button
+              className="mt-4 w-full"
+              variant="secondary"
+              onClick={() => {
+                void auth.logout();
+              }}
+            >
+              Sign out
+            </Button>
           </div>
         </aside>
 

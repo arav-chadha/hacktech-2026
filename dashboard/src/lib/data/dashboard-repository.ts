@@ -1,10 +1,9 @@
 "use client";
 
-import { AVAILABLE_LANGUAGES, DEFAULT_SETTINGS } from "@/lib/data/mock-data";
-import { mapOverviewStats, mapVocabularyEntries } from "@/lib/data/mappers";
-import { loadSemanticGraphSnapshot } from "@/lib/data/semantic-map";
+import { dashboardConfig } from "@/lib/config";
 import type {
   DashboardRepository,
+  OverviewStats,
   ProgressRange,
   SemanticGraphSnapshot,
   StudyLanguage,
@@ -13,84 +12,96 @@ import type {
   VocabularyEntry,
 } from "@/lib/types/dashboard";
 
-const STORAGE_KEY = "hacktech.dashboard.v1";
-
-type PersistedDashboardState = {
-  settings: StudySettings;
+type DashboardRequestError = Error & {
+  status?: number;
 };
 
-function sanitizeSettings(settings?: Partial<StudySettings> | null): StudySettings {
-  return {
-    studyLanguageCode: settings?.studyLanguageCode ?? DEFAULT_SETTINGS.studyLanguageCode,
-    learningLevel: settings?.learningLevel ?? DEFAULT_SETTINGS.learningLevel,
-  };
-}
-
-function readPersistedState(): PersistedDashboardState {
-  if (typeof window === "undefined") {
-    return { settings: sanitizeSettings(DEFAULT_SETTINGS) };
-  }
-
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    return { settings: sanitizeSettings(DEFAULT_SETTINGS) };
+async function readDashboardResponse(response: Response) {
+  const responseText = await response.text();
+  if (!responseText) {
+    return {};
   }
 
   try {
-    const parsed = JSON.parse(raw) as Partial<PersistedDashboardState>;
-    return {
-      settings: sanitizeSettings(parsed.settings),
-    };
+    return JSON.parse(responseText) as Record<string, unknown>;
   } catch {
-    return { settings: sanitizeSettings(DEFAULT_SETTINGS) };
+    throw new Error("Dashboard backend returned unreadable JSON.");
   }
 }
 
-function writePersistedState(state: PersistedDashboardState) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
+async function requestDashboard<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
 
-async function getStoredSettings(): Promise<StudySettings> {
-  const state = readPersistedState();
-  return state.settings;
+  const response = await fetch(`${dashboardConfig.apiBaseUrl}${path}`, {
+    ...init,
+    credentials: "include",
+    headers,
+  });
+  const payload = await readDashboardResponse(response);
+
+  if (!response.ok) {
+    const error = new Error(
+      String(payload?.error ?? `Dashboard request failed (${response.status}).`)
+    ) as DashboardRequestError;
+    error.status = response.status;
+    throw error;
+  }
+
+  return payload as T;
 }
 
 export function createDashboardRepository(): DashboardRepository {
   return {
     async getOverviewStats(range: ProgressRange) {
-      const settings = await getStoredSettings();
-      // BACKEND_INTEGRATION: Replace this local mapper call with an API-backed overview query.
-      return mapOverviewStats(settings, range);
+      const response = await requestDashboard<{ overview: OverviewStats }>(
+        `/dashboard/overview?range=${encodeURIComponent(range)}`
+      );
+      return response.overview;
     },
 
     async getVocabularyEntries(filters: VocabularyFilters): Promise<VocabularyEntry[]> {
-      void filters;
-      // BACKEND_INTEGRATION: Replace this local mapper call with a backend vocabulary search endpoint.
-      return mapVocabularyEntries(filters);
+      const searchParams = new URLSearchParams({
+        searchQuery: filters.searchQuery,
+        languageCode: filters.languageCode,
+        level: filters.level,
+        status: filters.status,
+        sortBy: filters.sortBy,
+        sortDirection: filters.sortDirection,
+      });
+      const response = await requestDashboard<{ entries: VocabularyEntry[] }>(
+        `/dashboard/vocabulary?${searchParams.toString()}`
+      );
+      return response.entries;
     },
 
     async getVocabularySemanticMap(): Promise<SemanticGraphSnapshot | null> {
-      // BACKEND_INTEGRATION: Replace local semantic snapshot loading and client-side neighborhood
-      // derivation with a backend vocabulary-semantic graph fetch once embeddings are served by API.
-      return loadSemanticGraphSnapshot();
+      const response = await requestDashboard<{ snapshot: SemanticGraphSnapshot | null }>(
+        "/dashboard/semantic-map"
+      );
+      return response.snapshot;
     },
 
     async getStudySettings() {
-      // BACKEND_INTEGRATION: Replace local storage reads with a user settings fetch when backend exists.
-      return getStoredSettings();
+      const response = await requestDashboard<{ settings: StudySettings }>("/dashboard/settings");
+      return response.settings;
     },
 
     async updateStudySettings(input: StudySettings) {
-      // BACKEND_INTEGRATION: Replace local persistence with a settings mutation request.
-      const sanitizedSettings = sanitizeSettings(input);
-      writePersistedState({ settings: sanitizedSettings });
-      return sanitizedSettings;
+      const response = await requestDashboard<{ settings: StudySettings }>("/dashboard/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: input,
+        }),
+      });
+      return response.settings;
     },
 
     async getAvailableLanguages(): Promise<StudyLanguage[]> {
-      // BACKEND_INTEGRATION: Replace static language list with backend-managed language capabilities if needed.
-      return AVAILABLE_LANGUAGES;
+      const response = await requestDashboard<{ languages: StudyLanguage[] }>("/dashboard/languages");
+      return response.languages;
     },
   };
 }

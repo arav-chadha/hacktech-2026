@@ -10,7 +10,7 @@ import type { LearningLevel, StudySettings } from "@/lib/types/dashboard";
 export function SettingsPage() {
   const { languages, settings, updateSettings, saving } = useDashboard();
   const [formState, setFormState] = useState<StudySettings | null>(settings);
-  const [status, setStatus] = useState("Local settings are ready for future backend sync.");
+  const [status, setStatus] = useState("Your settings are synced through the backend.");
 
   useEffect(() => {
     setFormState(settings);
@@ -30,7 +30,7 @@ export function SettingsPage() {
       return;
     }
     await updateSettings(formState);
-    setStatus("Saved locally. The repository seam is ready for backend wiring later.");
+    setStatus("Saved to the backend and ready on your next refresh.");
   }
 
   return (
