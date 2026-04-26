@@ -1,8 +1,8 @@
 import http from "node:http";
-import OpenAI, { APIError } from "openai";
+import OpenAI from "openai";
+import { GoogleGenAI, ApiError as GoogleApiError } from "@google/genai";
 import * as localConfig from "./local-config.js";
 import {
-  OPENAI_MODEL,
   PREPROMPT_ADVANCED,
   PREPROMPT_BEGINNER,
   PREPROMPT_ELEMENTARY,
@@ -71,6 +71,14 @@ const OPENAI_API_KEY =
   localConfig.OPENAI_API_KEY?.trim() ||
   "";
 const openAIClient = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+const GEMINI_API_KEY =
+  process.env.GEMINI_API_KEY?.trim() ||
+  process.env.GEMMA_API_KEY?.trim() ||
+  localConfig.LOCAL_GEMMA_API_KEY?.trim() ||
+  localConfig.GEMINI_API_KEY?.trim() ||
+  "";
+const GEMMA_MODEL = "gemma-3-27b-it";
+const geminiClient = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 const ELEVENLABS_API_KEY =
   process.env.ELEVENLABS_API_KEY?.trim() ||
   localConfig.LOCAL_ELEVENLABS_API_KEY?.trim() ||
@@ -416,6 +424,31 @@ function buildAlignmentPrompt(targetLanguage) {
   ].join("\n");
 }
 
+function extractGeminiText(response) {
+  if (typeof response?.text === "string") {
+    return response.text;
+  }
+
+  if (typeof response === "string") {
+    return response;
+  }
+
+  const parts = response?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) {
+    return "";
+  }
+
+  return parts
+    .map((part) => {
+      if (typeof part?.text === "string") {
+        return part.text;
+      }
+
+      return "";
+    })
+    .join("");
+}
+
 function extractOpenAIText(content) {
   if (typeof content === "string") {
     return content;
@@ -663,21 +696,17 @@ function parseRetryDelayMs(retryDelay) {
 }
 
 function getRetryDelayMs(error) {
-  if (!(error instanceof APIError)) {
-    return null;
-  }
-
-  const retryAfterMs = parseRetryDelayMs(error.headers?.get("retry-after-ms"));
+  const retryAfterMs = parseRetryDelayMs(error?.headers?.get?.("retry-after-ms"));
   if (retryAfterMs !== null) {
     return retryAfterMs;
   }
 
-  const retryAfter = parseRetryDelayMs(error.headers?.get("retry-after"));
+  const retryAfter = parseRetryDelayMs(error?.headers?.get?.("retry-after"));
   if (retryAfter !== null) {
     return retryAfter;
   }
 
-  if (error.status === 429) {
+  if (error?.status === 429) {
     return FALLBACK_RETRY_DELAY_MS;
   }
 
@@ -685,7 +714,7 @@ function getRetryDelayMs(error) {
 }
 
 function toRetryableTranslationError(error) {
-  if (!(error instanceof APIError)) {
+  if (!(error instanceof GoogleApiError) && typeof error?.status !== "number") {
     return null;
   }
 
@@ -1175,48 +1204,48 @@ async function handleDashboardRequest({
   return true;
 }
 
-async function requestOpenAIJson(prompt, payload) {
-  if (!openAIClient) {
-    throw new Error("Missing OpenAI API key. Set OPENAI_API_KEY or LOCAL_OPENAI_API_KEY.");
+async function requestGemmaJson(prompt, payload) {
+  if (!geminiClient) {
+    throw new Error("Missing Gemini API key. Set GEMINI_API_KEY, GEMMA_API_KEY, or LOCAL_GEMMA_API_KEY.");
   }
 
-  logServerEvent("openai-json-request-start", {
-    model: OPENAI_MODEL,
+  logServerEvent("gemma-json-request-start", {
+    model: GEMMA_MODEL,
     promptLength: prompt.length,
     payloadLength: payload.length,
   });
 
-  const response = await openAIClient.chat.completions.create({
-    model: OPENAI_MODEL,
-    temperature: 0,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: prompt },
-      { role: "user", content: payload },
-    ],
+  const response = await geminiClient.models.generateContent({
+    model: GEMMA_MODEL,
+    contents: payload,
+    config: {
+      temperature: 0,
+      responseMimeType: "application/json",
+      systemInstruction: prompt,
+    },
   });
 
-  const responseText = extractOpenAIText(response.choices?.[0]?.message?.content);
-  logServerEvent("openai-json-request-success", {
-    model: OPENAI_MODEL,
+  const responseText = extractGeminiText(response);
+  logServerEvent("gemma-json-request-success", {
+    model: GEMMA_MODEL,
     responseLength: responseText.length,
   });
   return responseText;
 }
 
-async function requestOpenAIJsonWithRetries(prompt, payload) {
+async function requestGemmaJsonWithRetries(prompt, payload) {
   let attempt = 0;
 
   while (attempt < MAX_TRANSLATION_ATTEMPTS) {
     attempt += 1;
 
     try {
-      return await requestOpenAIJson(prompt, payload);
+      return await requestGemmaJson(prompt, payload);
     } catch (error) {
       const retryableError = toRetryableTranslationError(error);
       const canRetry = retryableError && attempt < MAX_TRANSLATION_ATTEMPTS;
 
-      logServerEvent("openai-json-request-error", {
+      logServerEvent("gemma-json-request-error", {
         attempt,
         canRetry: Boolean(canRetry),
         retryDelayMs: retryableError?.retryDelayMs ?? null,
@@ -1407,29 +1436,28 @@ function beginTranslationStream(response) {
   });
 }
 
-async function requestOpenAIStream(prompt, text) {
-  if (!openAIClient) {
-    throw new Error("Missing OpenAI API key. Set OPENAI_API_KEY or LOCAL_OPENAI_API_KEY.");
+async function requestGemmaStream(prompt, text) {
+  if (!geminiClient) {
+    throw new Error("Missing Gemini API key. Set GEMINI_API_KEY, GEMMA_API_KEY, or LOCAL_GEMMA_API_KEY.");
   }
 
-  logServerEvent("openai-stream-request-start", {
-    model: OPENAI_MODEL,
+  logServerEvent("gemma-stream-request-start", {
+    model: GEMMA_MODEL,
     promptLength: prompt.length,
     textLength: text.length,
   });
 
-  const streamResult = await openAIClient.chat.completions.create({
-    model: OPENAI_MODEL,
-    temperature: 0,
-    stream: true,
-    messages: [
-      { role: "system", content: prompt },
-      { role: "user", content: text },
-    ],
+  const streamResult = await geminiClient.models.generateContentStream({
+    model: GEMMA_MODEL,
+    contents: text,
+    config: {
+      temperature: 0,
+      systemInstruction: prompt,
+    },
   });
 
-  logServerEvent("openai-stream-request-opened", {
-    model: OPENAI_MODEL,
+  logServerEvent("gemma-stream-request-opened", {
+    model: GEMMA_MODEL,
   });
 
   return streamResult;
@@ -1470,10 +1498,10 @@ async function streamTranslatedParagraph({
         targetLanguage,
       });
 
-      const streamResult = await requestOpenAIStream(prompt, markerizedText);
+      const streamResult = await requestGemmaStream(prompt, markerizedText);
 
       for await (const responseChunk of streamResult) {
-        const chunkText = extractOpenAIText(responseChunk.choices?.[0]?.delta?.content);
+        const chunkText = extractGeminiText(responseChunk);
         if (!chunkText) {
           continue;
         }
