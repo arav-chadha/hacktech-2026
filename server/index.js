@@ -172,33 +172,6 @@ function extractOpenAIText(content) {
     .join("");
 }
 
-function mergeStreamChunkText(previousText, chunkText) {
-  if (!chunkText) {
-    return previousText;
-  }
-
-  if (!previousText) {
-    return chunkText;
-  }
-
-  if (chunkText.startsWith(previousText)) {
-    return chunkText;
-  }
-
-  if (previousText.endsWith(chunkText)) {
-    return previousText;
-  }
-
-  const maxOverlap = Math.min(previousText.length, chunkText.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (previousText.slice(-overlap) === chunkText.slice(0, overlap)) {
-      return previousText + chunkText.slice(overlap);
-    }
-  }
-
-  return previousText + chunkText;
-}
-
 function tokenizeWords(text) {
   const normalizedText = String(text ?? "").normalize("NFC");
   const tokenPattern = new RegExp(ALIGNMENT_WORD_PATTERN.source, ALIGNMENT_WORD_PATTERN.flags);
@@ -977,23 +950,18 @@ async function streamTranslatedParagraph({ splitText, targetLanguage, settings, 
         }
 
         chunkCount += 1;
-        const candidateMarkerizedText = mergeStreamChunkText(
-          streamedMarkerizedText,
-          chunkText
-        );
-        const parsedChunk = parseTranslatedMarkerizedText(candidateMarkerizedText, segments);
+        streamedMarkerizedText += chunkText;
+        const parsedChunk = parseTranslatedMarkerizedText(streamedMarkerizedText, segments);
         if (!parsedChunk.ok) {
           logServerEvent("translation-marker-parse-error", {
             attempt,
             chunkCount,
             error: parsedChunk.error,
-            streamedLength: candidateMarkerizedText.length,
-            action: "skip-intermediate-chunk",
+            streamedLength: streamedMarkerizedText.length,
+            action: "wait-for-more-stream-content",
           });
           continue;
         }
-
-        streamedMarkerizedText = candidateMarkerizedText;
 
         if (
           parsedChunk.normalizedText &&
