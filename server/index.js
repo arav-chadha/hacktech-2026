@@ -136,6 +136,9 @@ function buildAlignmentPrompt(targetLanguage) {
     "Only include spans for words or phrases that were actually translated.",
     "Do not include unchanged spans.",
     "Do not let target spans overlap each other.",
+    "Prefer one-to-one word alignments whenever possible.",
+    "Use multi-word phrase alignments only when a precise one-to-one alignment is impossible.",
+    "Do not map a single source word to a long multi-word target phrase unless it is absolutely necessary.",
     "Favor the smallest accurate aligned phrase span.",
   ].join("\n");
 }
@@ -306,7 +309,9 @@ function buildDeterministicAlignments(sourceTokens, targetTokens) {
     previousTargetIndex = match.targetIndex;
   }
 
-  return alignments;
+  return alignments.flatMap((alignment) =>
+    expandAlignmentRecord(alignment, sourceTokens, targetTokens)
+  );
 }
 
 function canonicalizeAlignedText(text) {
@@ -438,8 +443,15 @@ function normalizeAlignmentEntry(
 
   const sourceText = joinTokenText(sourceTokens, sourceStart, sourceEnd);
   const targetText = joinTokenText(targetTokens, targetStart, targetEnd);
+  const sourceCount = sourceEnd - sourceStart + 1;
+  const targetCount = targetEnd - targetStart + 1;
 
   if (canonicalizeAlignedText(sourceText) === canonicalizeAlignedText(targetText)) {
+    return null;
+  }
+
+  // Reject obviously low-quality coarse mappings like "another" -> "otro miembro del ...".
+  if (sourceCount === 1 && targetCount > 1) {
     return null;
   }
 
@@ -545,6 +557,85 @@ function buildTranslationFromParsed(parsedTranslation, segments) {
   };
 }
 
+function expandAlignmentRecord(alignment, sourceTokens, targetTokens) {
+  if (!alignment) {
+    return [];
+  }
+
+  const sourceCount = alignment.sourceEnd - alignment.sourceStart + 1;
+  const targetCount = alignment.targetEnd - alignment.targetStart + 1;
+  if (sourceCount <= 1 && targetCount <= 1) {
+    return [alignment];
+  }
+
+  if (sourceCount === targetCount) {
+    return Array.from({ length: sourceCount }, (_, offset) =>
+      buildAlignmentRecord(
+        `${alignment.id}-${offset + 1}`,
+        sourceTokens,
+        targetTokens,
+        alignment.sourceStart + offset,
+        alignment.sourceStart + offset,
+        alignment.targetStart + offset,
+        alignment.targetStart + offset
+      )
+    ).filter(Boolean);
+  }
+
+  // For uneven spans, emit one alignment per target token using a monotonic
+  // proportional mapping into the source span. This keeps underline coverage
+  // complete while avoiding large shared phrase tooltips.
+  return Array.from({ length: targetCount }, (_, targetOffset) => {
+    const targetIndex = alignment.targetStart + targetOffset;
+    const sourceOffset =
+      targetCount === 1
+        ? 0
+        : Math.round((targetOffset * Math.max(0, sourceCount - 1)) / Math.max(1, targetCount - 1));
+    const sourceIndex = alignment.sourceStart + Math.min(sourceOffset, sourceCount - 1);
+
+    return buildAlignmentRecord(
+      `${alignment.id}-${targetOffset + 1}`,
+      sourceTokens,
+      targetTokens,
+      sourceIndex,
+      sourceIndex,
+      targetIndex,
+      targetIndex
+    );
+  }).filter(Boolean);
+}
+
+async function buildModelAlignments({ sourceTokens, targetTokens, targetLanguage }) {
+  const prompt = buildAlignmentPrompt(targetLanguage);
+  const payload = JSON.stringify({
+    sourceTokens: sourceTokens.map((token) => token.text),
+    targetTokens: targetTokens.map((token) => token.text),
+  });
+  const responseText = await requestGemmaJsonWithRetries(prompt, payload);
+  const responseJson = parseJsonResponse(responseText);
+  const rawAlignments = Array.isArray(responseJson?.alignments) ? responseJson.alignments : [];
+  const usedTargetIndexes = new Set();
+
+  const sortedAlignments = [...rawAlignments].sort((left, right) => {
+    const leftTargetCount = Number(left?.targetEnd) - Number(left?.targetStart);
+    const rightTargetCount = Number(right?.targetEnd) - Number(right?.targetStart);
+    if (leftTargetCount !== rightTargetCount) {
+      return leftTargetCount - rightTargetCount;
+    }
+
+    const leftSourceCount = Number(left?.sourceEnd) - Number(left?.sourceStart);
+    const rightSourceCount = Number(right?.sourceEnd) - Number(right?.sourceStart);
+    return leftSourceCount - rightSourceCount;
+  });
+
+  return sortedAlignments
+    .map((entry, index) =>
+      normalizeAlignmentEntry(entry, index, sourceTokens, targetTokens, usedTargetIndexes)
+    )
+    .flatMap((alignment) => expandAlignmentRecord(alignment, sourceTokens, targetTokens))
+    .filter(Boolean);
+}
+
 async function buildTranslationAlignments({ sourceText, translatedText, targetLanguage }) {
   const sourceTokens = tokenizeWords(sourceText);
   const targetTokens = tokenizeWords(translatedText);
@@ -557,8 +648,40 @@ async function buildTranslationAlignments({ sourceText, translatedText, targetLa
     targetLanguage,
     sourceTokenCount: sourceTokens.length,
     targetTokenCount: targetTokens.length,
-    strategy: "deterministic-changed-runs",
+    strategy: "gemini-json-with-deterministic-fallback",
   });
+
+  try {
+    const modelAlignments = await buildModelAlignments({
+      sourceTokens,
+      targetTokens,
+      targetLanguage,
+    });
+
+    if (modelAlignments.length > 0) {
+      logServerEvent("alignment-success", {
+        targetLanguage,
+        sourceTokenCount: sourceTokens.length,
+        targetTokenCount: targetTokens.length,
+        alignmentCount: modelAlignments.length,
+        strategy: "gemini-json",
+      });
+
+      return modelAlignments;
+    }
+
+    logServerEvent("alignment-model-empty-fallback", {
+      targetLanguage,
+      sourceTokenCount: sourceTokens.length,
+      targetTokenCount: targetTokens.length,
+    });
+  } catch (error) {
+    logServerEvent("alignment-model-error-fallback", {
+      targetLanguage,
+      errorName: error?.name ?? null,
+      errorMessage: error?.message ?? String(error),
+    });
+  }
 
   const normalizedAlignments = buildDeterministicAlignments(sourceTokens, targetTokens);
 
@@ -567,6 +690,7 @@ async function buildTranslationAlignments({ sourceText, translatedText, targetLa
     sourceTokenCount: sourceTokens.length,
     targetTokenCount: targetTokens.length,
     alignmentCount: normalizedAlignments.length,
+    strategy: "deterministic-changed-runs",
   });
 
   return normalizedAlignments;
