@@ -13,8 +13,9 @@ import {
 } from "../shared/translationMarkup";
 
 const ALIGNMENT_TOKEN_ATTR = "data-language-extension-alignment-token";
-const TOAST_ID = "language-extension-alignment-toast";
+const LOOKUP_CARD_ID = "language-extension-lookup-card";
 const STYLE_ID = "language-extension-alignment-style";
+const LOOKUP_HOVER_DELAY_MS = 500;
 
 const processedNodes = new WeakSet();
 const PROCESSED_ATTR = "data-language-extension-processed";
@@ -59,8 +60,9 @@ const EXCLUDED_CONTAINER_SELECTOR = [
 ].join(", ");
 
 let userEmail = null;
-let activeToastTimeout = null;
-let activeHoverAlertTimeout = null;
+const lookupCache = new Map();
+let activeLookupRequestId = 0;
+let activeLookupHoverTimeout = null;
 
 chrome.storage.local.get("userEmail", (data) => {
   console.log("Fetching email");
@@ -105,6 +107,19 @@ function getWordMatches(text) {
 
 function createWordPattern() {
     return /[\p{L}\p{N}\p{M}'’-]+/gu;
+}
+
+function getAlignmentTokenText(alignmentText, relativeIndex) {
+    const tokens = getWordMatches(alignmentText).map((match) => match[0]);
+    if (tokens.length === 0) {
+        return alignmentText;
+    }
+
+    if (relativeIndex < tokens.length) {
+        return tokens[relativeIndex];
+    }
+
+    return tokens[tokens.length - 1];
 }
 
 function buildStartTag(element) {
@@ -201,11 +216,6 @@ function injectTranslatedHtml(paragraph, translatedHtml) {
     paragraph.innerHTML = translatedHtml;
 }
 
-function clearParagraphForStreaming(paragraph) {
-    paragraph.setAttribute(PROCESSED_ATTR, "true");
-    paragraph.innerHTML = "";
-}
-
 function restoreOriginalParagraphHtml(paragraph, originalHtml) {
     paragraph.removeAttribute(PROCESSED_ATTR);
     paragraph.innerHTML = originalHtml;
@@ -235,34 +245,62 @@ function ensureAlignmentStyles() {
             box-shadow: 0 0 0 1px rgba(160, 166, 173, 0.6);
         }
 
-        #${TOAST_ID} {
+        #${LOOKUP_CARD_ID} {
             position: fixed;
             z-index: 2147483647;
-            max-width: min(320px, calc(100vw - 24px));
-            padding: 10px 12px;
-            border-radius: 10px;
+            max-width: min(260px, calc(100vw - 20px));
+            min-width: 180px;
+            padding: 8px 10px;
+            border-radius: 8px;
             background: rgba(28, 32, 39, 0.96);
             color: #f6f7fb;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
-            font: 13px/1.4 system-ui, sans-serif;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            font: 12px/1.35 system-ui, sans-serif;
             pointer-events: none;
             opacity: 0;
             transform: translateY(6px);
             transition: opacity 140ms ease, transform 140ms ease;
         }
 
-        #${TOAST_ID}.language-extension-toast-visible {
+        #${LOOKUP_CARD_ID}.language-extension-lookup-card-visible {
             opacity: 1;
             transform: translateY(0);
         }
 
-        #${TOAST_ID} .language-extension-toast-label {
+        #${LOOKUP_CARD_ID} .language-extension-lookup-head {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            margin-bottom: 6px;
+        }
+
+        #${LOOKUP_CARD_ID} .language-extension-lookup-word {
+            color: rgba(246, 247, 251, 0.72);
+        }
+
+        #${LOOKUP_CARD_ID} .language-extension-lookup-original {
+            font-size: 13px;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        #${LOOKUP_CARD_ID} .language-extension-lookup-label {
             display: block;
-            margin-bottom: 4px;
-            font-size: 11px;
+            margin-bottom: 2px;
+            font-size: 10px;
             letter-spacing: 0.02em;
             text-transform: uppercase;
             color: rgba(246, 247, 251, 0.72);
+        }
+
+        #${LOOKUP_CARD_ID} .language-extension-lookup-section + .language-extension-lookup-section {
+            margin-top: 6px;
+        }
+
+        #${LOOKUP_CARD_ID} .language-extension-lookup-example {
+            color: rgba(246, 247, 251, 0.84);
+            font-style: italic;
         }
     `;
     document.documentElement.appendChild(style);
@@ -274,66 +312,151 @@ function clearActiveAlignmentTokens(root = document) {
     });
 }
 
-function getOrCreateAlignmentToast() {
-    let toast = document.getElementById(TOAST_ID);
-    if (toast) {
-        return toast;
+function getOrCreateLookupCard() {
+    let card = document.getElementById(LOOKUP_CARD_ID);
+    if (card) {
+        return card;
     }
 
-    toast = document.createElement("div");
-    toast.id = TOAST_ID;
-    document.body.appendChild(toast);
-    return toast;
+    card = document.createElement("div");
+    card.id = LOOKUP_CARD_ID;
+    document.body.appendChild(card);
+    return card;
 }
 
-function hideAlignmentToast() {
-    const toast = document.getElementById(TOAST_ID);
-    if (!toast) {
+function hideLookupCard() {
+    const card = document.getElementById(LOOKUP_CARD_ID);
+    if (!card) {
         return;
     }
 
-    toast.classList.remove("language-extension-toast-visible");
-    if (activeToastTimeout) {
-        window.clearTimeout(activeToastTimeout);
-        activeToastTimeout = null;
+    card.classList.remove("language-extension-lookup-card-visible");
+}
+
+function clearLookupHoverTimeout() {
+    if (activeLookupHoverTimeout) {
+        window.clearTimeout(activeLookupHoverTimeout);
+        activeLookupHoverTimeout = null;
     }
 }
 
-function clearHoverAlertTimeout() {
-    if (activeHoverAlertTimeout) {
-        window.clearTimeout(activeHoverAlertTimeout);
-        activeHoverAlertTimeout = null;
-    }
-}
-
-function showAlignmentToast(targetElement, sourceText) {
-    ensureAlignmentStyles();
-    const toast = getOrCreateAlignmentToast();
+function positionLookupCard(card, targetElement) {
     const rect = targetElement.getBoundingClientRect();
+    const margin = 10;
+    const top = Math.min(window.innerHeight - margin, rect.bottom + 8);
+    const left = Math.min(
+        window.innerWidth - card.offsetWidth - margin,
+        Math.max(margin, rect.left)
+    );
 
-    toast.innerHTML = "";
-    const label = document.createElement("span");
-    label.className = "language-extension-toast-label";
-    label.textContent = "Original";
-    const body = document.createElement("div");
-    body.textContent = sourceText;
-    toast.append(label, body);
+    card.style.top = `${top}px`;
+    card.style.left = `${left}px`;
+}
 
-    const margin = 12;
-    const top = Math.min(window.innerHeight - margin, rect.bottom + 10);
-    const left = Math.min(window.innerWidth - margin, Math.max(margin, rect.left));
+function renderLookupCard(targetElement, lookupState) {
+    ensureAlignmentStyles();
+    const card = getOrCreateLookupCard();
+    const translatedWord = lookupState?.word || targetElement.dataset.targetText || targetElement.textContent || "";
+    const originalWord = targetElement.dataset.sourceText || "";
+    const definition = lookupState?.definition || "No dictionary definition found.";
+    const example = lookupState?.example || "No example usage found.";
 
-    toast.style.top = `${top}px`;
-    toast.style.left = `${left}px`;
-    toast.classList.add("language-extension-toast-visible");
+    card.innerHTML = `
+        <div class="language-extension-lookup-head">
+            <div class="language-extension-lookup-original">${originalWord}</div>
+            <div class="language-extension-lookup-word">${translatedWord}</div>
+        </div>
+        <div class="language-extension-lookup-section">
+            <span class="language-extension-lookup-label">Definition</span>
+            <div>${definition}</div>
+        </div>
+        <div class="language-extension-lookup-section">
+            <span class="language-extension-lookup-label">Example</span>
+            <div class="language-extension-lookup-example">${example}</div>
+        </div>
+    `;
 
-    if (activeToastTimeout) {
-        window.clearTimeout(activeToastTimeout);
-        activeToastTimeout = null;
+    positionLookupCard(card, targetElement);
+    card.classList.add("language-extension-lookup-card-visible");
+}
+
+function getLookupCacheKey(targetLanguage, word) {
+    return `${targetLanguage}::${normalizeWhitespace(word).toLocaleLowerCase()}`;
+}
+
+async function fetchWordLookup(word, targetLanguage) {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+            {
+                type: "LOOKUP_WORD",
+                payload: {
+                    word,
+                    targetLanguage,
+                },
+            },
+            (response) => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                    return;
+                }
+
+                if (response?.error) {
+                    reject(new Error(response.error));
+                    return;
+                }
+
+                resolve(response?.lookup ?? null);
+            }
+        );
+    });
+}
+
+async function showLookupCardForToken(alignedToken) {
+    const targetWord = alignedToken.dataset.targetText;
+    const targetLanguage = alignedToken.dataset.targetLanguage;
+
+    if (!targetWord || !targetLanguage) {
+        renderLookupCard(alignedToken, null);
+        return;
+    }
+
+    const cacheKey = getLookupCacheKey(targetLanguage, targetWord);
+    if (lookupCache.has(cacheKey)) {
+        renderLookupCard(alignedToken, lookupCache.get(cacheKey));
+        return;
+    }
+
+    renderLookupCard(alignedToken, {
+        word: targetWord,
+        definition: "Loading definition...",
+        example: null,
+    });
+
+    const requestId = ++activeLookupRequestId;
+
+    try {
+        const lookup = await fetchWordLookup(targetWord, targetLanguage);
+        lookupCache.set(cacheKey, lookup);
+
+        if (requestId !== activeLookupRequestId || !alignedToken.matches(":hover")) {
+            return;
+        }
+
+        renderLookupCard(alignedToken, lookup);
+    } catch (error) {
+        if (requestId !== activeLookupRequestId || !alignedToken.matches(":hover")) {
+            return;
+        }
+
+        renderLookupCard(alignedToken, {
+            word: targetWord,
+            definition: "Definition unavailable.",
+            example: null,
+        });
     }
 }
 
-function applyAlignmentMarkup(paragraph, alignments) {
+function applyAlignmentMarkup(paragraph, alignments, targetLanguage) {
     if (!Array.isArray(alignments) || alignments.length === 0) {
         return;
     }
@@ -396,6 +519,7 @@ function applyAlignmentMarkup(paragraph, alignments) {
     const tokenSegments = tokenMatches.map((match, tokenIndex) => {
         const alignment = tokenAlignments.get(tokenIndex);
         return {
+            tokenIndex,
             start: match.index ?? 0,
             end: (match.index ?? 0) + match[0].length,
             alignment,
@@ -411,6 +535,7 @@ function applyAlignmentMarkup(paragraph, alignments) {
         const intersectingSegments = tokenSegments
             .filter((segment) => segment.end > nodeStart && segment.start < nodeEnd)
             .map((segment) => ({
+                tokenIndex: segment.tokenIndex,
                 localStart: Math.max(0, segment.start - nodeStart),
                 localEnd: Math.min(text.length, segment.end - nodeStart),
                 alignment: segment.alignment,
@@ -432,11 +557,15 @@ function applyAlignmentMarkup(paragraph, alignments) {
 
             const segmentText = text.slice(segment.localStart, segment.localEnd);
             if (segment.alignment) {
+                const targetOffset = Math.max(0, segment.tokenIndex - segment.alignment.targetStart);
+                const sourceWord = getAlignmentTokenText(segment.alignment.sourceText, targetOffset);
+                const targetWord = getAlignmentTokenText(segment.alignment.targetText, targetOffset);
                 const span = document.createElement("span");
                 span.setAttribute(ALIGNMENT_TOKEN_ATTR, segment.alignment.id);
                 span.dataset.alignmentId = segment.alignment.id;
-                span.dataset.sourceText = segment.alignment.sourceText;
-                span.dataset.targetText = segment.alignment.targetText;
+                span.dataset.sourceText = sourceWord;
+                span.dataset.targetText = targetWord;
+                span.dataset.targetLanguage = targetLanguage;
                 span.textContent = segmentText;
                 fragment.append(span);
             } else {
@@ -484,12 +613,11 @@ function installAlignmentInteractions() {
                 });
         }
 
-        showAlignmentToast(alignedToken, sourceText);
-        clearHoverAlertTimeout();
-        activeHoverAlertTimeout = window.setTimeout(() => {
-            activeHoverAlertTimeout = null;
-            alert(sourceText);
-        }, 1000);
+        clearLookupHoverTimeout();
+        activeLookupHoverTimeout = window.setTimeout(() => {
+            activeLookupHoverTimeout = null;
+            void showLookupCardForToken(alignedToken);
+        }, LOOKUP_HOVER_DELAY_MS);
     });
 
     document.addEventListener("mouseout", (event) => {
@@ -514,8 +642,8 @@ function installAlignmentInteractions() {
         } else {
             clearActiveAlignmentTokens();
         }
-        clearHoverAlertTimeout();
-        hideAlignmentToast();
+        clearLookupHoverTimeout();
+        hideLookupCard();
     });
 }
 
@@ -592,7 +720,11 @@ async function translateSelection(selection, settings) {
             injectTranslatedHtml(selection.node, translatedHtml);
 
             if (message.type === "done") {
-                applyAlignmentMarkup(selection.node, message?.translation?.alignments);
+                applyAlignmentMarkup(
+                    selection.node,
+                    message?.translation?.alignments,
+                    settings.selectedLanguage
+                );
             }
 
             if (message.type === "done") {

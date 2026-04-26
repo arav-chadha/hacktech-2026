@@ -14,6 +14,7 @@ import {
   buildMarkerizedTextFromSplitText,
   buildPlainTextFromParsedMarkers,
   buildRawTextFromSplitText,
+  normalizeWhitespace,
   parseTranslatedMarkerizedText,
   reconstructHtmlFromParsedMarkers,
 } from "../src/shared/translationMarkup.js";
@@ -24,6 +25,10 @@ const SERVER_PORT = localConfig.SERVER_PORT;
 const MAX_TRANSLATION_ATTEMPTS = 3;
 const FALLBACK_RETRY_DELAY_MS = 60_000;
 const ALIGNMENT_WORD_PATTERN = /[\p{L}\p{N}\p{M}'’-]+/gu;
+const TARGET_LANGUAGE_CODE_MAP = {
+  spanish: "es",
+  french: "fr",
+};
 
 const OPENAI_API_KEY =
   process.env.OPENAI_API_KEY?.trim() || localConfig.LOCAL_OPENAI_API_KEY?.trim() || "";
@@ -165,6 +170,33 @@ function extractOpenAIText(content) {
       return "";
     })
     .join("");
+}
+
+function mergeStreamChunkText(previousText, chunkText) {
+  if (!chunkText) {
+    return previousText;
+  }
+
+  if (!previousText) {
+    return chunkText;
+  }
+
+  if (chunkText.startsWith(previousText)) {
+    return chunkText;
+  }
+
+  if (previousText.endsWith(chunkText)) {
+    return previousText;
+  }
+
+  const maxOverlap = Math.min(previousText.length, chunkText.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (previousText.slice(-overlap) === chunkText.slice(0, overlap)) {
+      return previousText + chunkText.slice(overlap);
+    }
+  }
+
+  return previousText + chunkText;
 }
 
 function tokenizeWords(text) {
@@ -407,6 +439,173 @@ function parseJsonResponse(text) {
   } catch (error) {
     throw new Error(`Model returned invalid JSON: ${error.message}`);
   }
+}
+
+function normalizeLookupWord(word) {
+  return String(word ?? "")
+    .normalize("NFC")
+    .trim()
+    .replace(/^[^\p{L}\p{N}\p{M}]+|[^\p{L}\p{N}\p{M}]+$/gu, "");
+}
+
+function getTargetLanguageCode(targetLanguage) {
+  return TARGET_LANGUAGE_CODE_MAP[String(targetLanguage ?? "").toLowerCase()] ?? null;
+}
+
+function getWiktApiEntries(responseJson) {
+  if (Array.isArray(responseJson?.definitions)) {
+    return responseJson.definitions.map((definition) => ({
+      ...definition,
+      word: definition?.word ?? responseJson.word ?? null,
+      lang_code: definition?.lang_code ?? responseJson.lang_code ?? null,
+      lang: definition?.lang ?? responseJson.lang ?? null,
+    }));
+  }
+
+  if (Array.isArray(responseJson)) {
+    return responseJson;
+  }
+
+  if (Array.isArray(responseJson?.entries)) {
+    return responseJson.entries;
+  }
+
+  if (Array.isArray(responseJson?.data)) {
+    return responseJson.data;
+  }
+
+  if (responseJson && typeof responseJson === "object") {
+    return [responseJson];
+  }
+
+  return [];
+}
+
+function extractLookupExample(example) {
+  if (typeof example === "string") {
+    return normalizeWhitespace(example);
+  }
+
+  if (example && typeof example === "object") {
+    if (typeof example.english === "string") {
+      return normalizeWhitespace(example.english);
+    }
+
+    if (typeof example.text === "string") {
+      return normalizeWhitespace(example.text);
+    }
+
+    if (typeof example.example === "string") {
+      return normalizeWhitespace(example.example);
+    }
+
+    if (typeof example.quote === "string") {
+      return normalizeWhitespace(example.quote);
+    }
+
+    if (typeof example.raw === "string") {
+      return normalizeWhitespace(example.raw);
+    }
+  }
+
+  return null;
+}
+
+function getSenseExample(sense) {
+  if (!sense || typeof sense !== "object") {
+    return null;
+  }
+
+  const exampleCollections = [
+    Array.isArray(sense.examples) ? sense.examples : [],
+    Array.isArray(sense.usage_examples) ? sense.usage_examples : [],
+    Array.isArray(sense.quotations) ? sense.quotations : [],
+  ];
+
+  for (const collection of exampleCollections) {
+    const example = collection.map(extractLookupExample).find(Boolean);
+    if (example) {
+      return example;
+    }
+  }
+
+  return null;
+}
+
+function extractLookupResultFromEntries(entries, fallbackWord) {
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+
+    const senses = Array.isArray(entry.senses) ? entry.senses : [];
+    for (const sense of senses) {
+      if (!sense || typeof sense !== "object") {
+        continue;
+      }
+
+      const definition =
+        Array.isArray(sense.glosses) && typeof sense.glosses[0] === "string"
+          ? normalizeWhitespace(sense.glosses[0])
+          : null;
+
+      if (!definition) {
+        continue;
+      }
+
+      const example = getSenseExample(sense);
+
+      return {
+        word: normalizeLookupWord(entry.word || fallbackWord),
+        definition,
+        example,
+      };
+    }
+  }
+
+  return {
+    word: normalizeLookupWord(fallbackWord),
+    definition: null,
+    example: null,
+  };
+}
+
+async function fetchWordLookup({ word, targetLanguage }) {
+  const normalizedWord = normalizeLookupWord(word);
+  if (!normalizedWord) {
+    throw new Error("word is required.");
+  }
+
+  const languageCode = getTargetLanguageCode(targetLanguage);
+  if (!languageCode) {
+    throw new Error(`Unsupported lookup language: ${targetLanguage}`);
+  }
+
+  const editionsToTry = Array.from(new Set([languageCode, "en"]));
+  for (const edition of editionsToTry) {
+    const lookupUrl = new URL(
+      `https://api.wiktapi.dev/v1/${edition}/word/${encodeURIComponent(normalizedWord)}/definitions`
+    );
+    lookupUrl.searchParams.set("lang", languageCode);
+
+    const response = await fetch(lookupUrl);
+    if (!response.ok) {
+      continue;
+    }
+
+    const responseJson = await response.json();
+    const entries = getWiktApiEntries(responseJson);
+    const result = extractLookupResultFromEntries(entries, normalizedWord);
+    if (result.definition) {
+      return result;
+    }
+  }
+
+  return {
+    word: normalizedWord,
+    definition: null,
+    example: null,
+  };
 }
 
 function normalizeAlignmentEntry(
@@ -778,16 +977,23 @@ async function streamTranslatedParagraph({ splitText, targetLanguage, settings, 
         }
 
         chunkCount += 1;
-        streamedMarkerizedText += chunkText;
-        const parsedChunk = parseTranslatedMarkerizedText(streamedMarkerizedText, segments);
+        const candidateMarkerizedText = mergeStreamChunkText(
+          streamedMarkerizedText,
+          chunkText
+        );
+        const parsedChunk = parseTranslatedMarkerizedText(candidateMarkerizedText, segments);
         if (!parsedChunk.ok) {
           logServerEvent("translation-marker-parse-error", {
             attempt,
             chunkCount,
             error: parsedChunk.error,
+            streamedLength: candidateMarkerizedText.length,
+            action: "skip-intermediate-chunk",
           });
-          throw new MarkerValidationError(parsedChunk.error);
+          continue;
         }
+
+        streamedMarkerizedText = candidateMarkerizedText;
 
         if (
           parsedChunk.normalizedText &&
@@ -885,6 +1091,35 @@ const server = http.createServer(async (request, response) => {
   if (request.url === "/health" && request.method === "GET") {
     sendJson(response, 200, { ok: true });
     return;
+  }
+
+  if (request.url === "/lookup-word" && request.method === "POST") {
+    try {
+      const body = await readJsonBody(request);
+      const word = String(body?.word ?? "").trim();
+      const targetLanguage = String(body?.targetLanguage ?? "").trim();
+
+      if (!word) {
+        sendJson(response, 400, { error: "word is required." });
+        return;
+      }
+
+      if (!targetLanguage) {
+        sendJson(response, 400, { error: "targetLanguage is required." });
+        return;
+      }
+
+      const lookup = await fetchWordLookup({ word, targetLanguage });
+      sendJson(response, 200, { lookup });
+      return;
+    } catch (error) {
+      logServerEvent("lookup-word-error", {
+        errorName: error?.name ?? null,
+        errorMessage: error?.message ?? String(error),
+      });
+      sendJson(response, 500, { error: error?.message ?? "Word lookup failed." });
+      return;
+    }
   }
 
   if (request.url !== "/translate" || request.method !== "POST") {

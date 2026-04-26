@@ -1,4 +1,5 @@
 const BACKEND_TRANSLATE_ENDPOINT = "http://127.0.0.1:8787/translate";
+const BACKEND_LOOKUP_WORD_ENDPOINT = "http://127.0.0.1:8787/lookup-word";
 
 async function readNdjsonStream(response, onEvent) {
   const reader = response.body?.getReader();
@@ -90,6 +91,31 @@ async function streamTranslation({
   }
 }
 
+async function lookupWord({ word, targetLanguage }) {
+  const response = await fetch(BACKEND_LOOKUP_WORD_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      word,
+      targetLanguage,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Backend lookup failed (${response.status}): ${errorText}`);
+  }
+
+  const responseData = await response.json();
+  if (!responseData?.lookup || typeof responseData.lookup !== "object") {
+    throw new Error(responseData?.error || "Backend returned an invalid lookup response.");
+  }
+
+  return responseData.lookup;
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "translation-stream") {
     return;
@@ -120,6 +146,21 @@ chrome.runtime.onConnect.addListener((port) => {
       port.postMessage({ type: "error", error: error.message });
     });
   });
+});
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type !== "LOOKUP_WORD") {
+    return undefined;
+  }
+
+  lookupWord(message.payload)
+    .then((lookup) => sendResponse({ lookup }))
+    .catch((error) => {
+      console.error("Word lookup failed:", error);
+      sendResponse({ error: error.message });
+    });
+
+  return true;
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
