@@ -6,8 +6,10 @@ import {
   PREPROMPT_ADVANCED,
   PREPROMPT_BEGINNER,
   PREPROMPT_ELEMENTARY,
+  PREPROMPT_FLUENT,
   PREPROMPT_INTERMEDIATE,
   PREPROMPT_SUFFIX,
+  isFullTranslationLevel,
   normalizeSettings,
 } from "../src/shared/settings.js";
 import {
@@ -69,6 +71,10 @@ function describeLengthBias(temperature) {
 }
 
 function getLevelPrompt(translationLevel) {
+  if (translationLevel === "fluent") {
+    return PREPROMPT_FLUENT;
+  }
+
   if (translationLevel === "advanced") {
     return PREPROMPT_ADVANCED;
   }
@@ -87,6 +93,14 @@ function getLevelPrompt(translationLevel) {
 function getPromptSuffix(translationLevel) {
   const suffixLines = PREPROMPT_SUFFIX.split("\n");
 
+  if (isFullTranslationLevel(translationLevel)) {
+    return suffixLines
+      .filter((line) => line !== "Leave every non-translated word exactly unchanged")
+      .filter((line) => line !== "Do not rewrite, paraphrase, summarize, or fully translate sentences")
+      .concat("Do not add explanations, notes, or alternatives.")
+      .join("\n");
+  }
+
   if (translationLevel !== "advanced") {
     return suffixLines.join("\n");
   }
@@ -104,12 +118,21 @@ function buildTranslationPrompt(targetLanguage, settings, priorityWords = []) {
   const maxWords = settings?.phraseMaxWords ?? 4;
   const maxCoveragePercent = settings?.phraseCoveragePercent ?? 16;
   const promptLines =
-    translationLevel === "advanced"
+    isFullTranslationLevel(translationLevel)
+      ? [
+          `Translate the input fully into ${targetLanguage}.`,
+          `Translation level: ${translationLevel}.`,
+          getLevelPrompt(translationLevel),
+          "Translate the full paragraph, including text inside markers.",
+          "Keep names, brands, and other intentional source-language text only when translating them would be unnatural or incorrect.",
+          getPromptSuffix(translationLevel),
+        ]
+      : translationLevel === "advanced"
       ? [
           `Translate the input into ${targetLanguage}.`,
           `Translation level: ${translationLevel}.`,
           getLevelPrompt(translationLevel),
-          `Translate about ${maxCoveragePercent}% of the words in the paragraph.`,
+          `Translate approximately ${maxCoveragePercent}% of the words in the paragraph.`,
           "Longer continuous translated spans are allowed when they sound natural.",
           describeLengthBias(settings?.phraseLengthTemperature ?? 0.5),
         ]

@@ -4,6 +4,7 @@ import browser from "webextension-polyfill";
 import "./Popup.css";
 import {
   DEFAULT_SETTINGS,
+  isFullTranslationLevel,
   LANGUAGE_STORAGE_KEY,
   PHRASE_COVERAGE_STORAGE_KEY,
   PHRASE_MAX_STORAGE_KEY,
@@ -28,6 +29,9 @@ export default function Popup() {
   const [status, setStatus] = useState("Loading settings...");
   const [isSaving, setIsSaving] = useState(false);
   const {email, loading, error, signIn, logout} = useAuth();
+  const usesFullTranslation = isFullTranslationLevel(
+    settings[TRANSLATION_LEVEL_STORAGE_KEY]
+  );
 
   useEffect(() => {
     async function loadSettings() {
@@ -121,7 +125,11 @@ export default function Popup() {
       <img src="/icon-with-shadow.svg" alt="Language Extension icon" />
       <div className="popup__copy">
         <h1>Language Extension</h1>
-        <p>Translate random phrases with OpenAI and tune phrase selection.</p>
+        <p>
+          {usesFullTranslation
+            ? "Fully translate the page into your target language."
+            : "Translate random phrases with OpenAI and tune phrase selection."}
+        </p>
       </div>
 
       <label className="popup__field" htmlFor="language-select">
@@ -149,6 +157,7 @@ export default function Popup() {
           <option value="elementary">Elementary</option>
           <option value="intermediate">Intermediate</option>
           <option value="advanced">Advanced</option>
+          <option value="fluent">Fluent</option>
         </select>
       </label>
 
@@ -177,6 +186,7 @@ export default function Popup() {
             max="10"
             value={settings[PHRASE_MAX_STORAGE_KEY]}
             onChange={handleFieldChange}
+            disabled={usesFullTranslation}
           />
         </label>
 
@@ -190,6 +200,7 @@ export default function Popup() {
             max="100"
             value={settings[PHRASE_COVERAGE_STORAGE_KEY]}
             onChange={handleFieldChange}
+            disabled={usesFullTranslation}
           />
         </label>
       </div>
@@ -208,8 +219,13 @@ export default function Popup() {
           step="0.01"
           value={settings[PHRASE_TEMPERATURE_STORAGE_KEY]}
           onChange={handleFieldChange}
+          disabled={usesFullTranslation}
         />
-        <small>0 favors shorter phrases. 1 favors longer phrases.</small>
+        <small>
+          {usesFullTranslation
+            ? "Fluent mode ignores phrase-length tuning and translates the full paragraph."
+            : "0 favors shorter phrases. 1 favors longer phrases."}
+        </small>
       </label>
 
       <button className="popup__button" type="submit" disabled={isSaving}>

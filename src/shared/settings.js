@@ -5,19 +5,26 @@ export const PHRASE_MAX_STORAGE_KEY = "phraseMaxWords";
 export const PHRASE_COVERAGE_STORAGE_KEY = "phraseCoveragePercent";
 export const PHRASE_TEMPERATURE_STORAGE_KEY = "phraseLengthTemperature";
 export const OPENAI_MODEL = "gpt-4o-mini";
+export const TRANSLATION_LEVELS = [
+  "beginner",
+  "elementary",
+  "intermediate",
+  "advanced",
+  "fluent",
+];
 
 export const PREPROMPT_SUFFIX = [
-    "Keep spacing and punctuation identical to input",
-    "Preserve whitespace between translated words; do not merge or remove spaces",
-    "Leave every non-translated word exactly unchanged",
-    "Do not rewrite, paraphrase, summarize, or fully translate sentences",
-    "Do not surround text w/ * \' or \"",
-    "Preserve markers exactly, both open and closed forms",
-    "Dont: add remove rename duplicate reorder marker bounds",
-    "Keep marker structure identical to input",
-    "Return only translated paragraph w/ markers",
-    "Do not return markdown code fences notes text or alternatives",
-  ].join("\n");
+  "Keep spacing and punctuation identical to input",
+  "Preserve whitespace between translated words; do not merge or remove spaces",
+  "Leave every non-translated word exactly unchanged",
+  "Do not rewrite, paraphrase, summarize, or fully translate sentences",
+  "Do not surround text w/ * \' or \"",
+  "Preserve markers exactly, both open and closed forms",
+  "Dont: add remove rename duplicate reorder marker bounds",
+  "Keep marker structure identical to input",
+  "Return only translated paragraph w/ markers",
+  "Do not return markdown code fences notes text or alternatives",
+].join("\n");
 
 export const PREPROMPT_BEGINNER = [
   "Translate only a sparse subset of the paragraph into the target language.",
@@ -50,6 +57,14 @@ export const PREPROMPT_ADVANCED = [
   "Translate naturally while preserving the original meaning, spacing pattern, punctuation, and marker structure.",
   "Leave only a small residual amount of the original language when needed to stay within the requested partial-translation behavior.",
   "If a choice is ambiguous, choose the most natural translation."
+].join("\n");
+
+export const PREPROMPT_FLUENT = [
+  "Fully translate the entire paragraph into the target language.",
+  "Translate naturally and idiomatically while preserving the original meaning.",
+  "Translate every translatable word unless leaving it unchanged is clearly required, such as for names, brands, or intentionally unchanged source text.",
+  "Preserve spacing pattern, punctuation, and marker structure exactly.",
+  "If a choice is ambiguous, choose the most natural fluent translation."
 ].join("\n");
 
 export const BEGINNER_SETTINGS = {
@@ -88,6 +103,15 @@ export const ADVANCED_SETTINGS = {
   [PHRASE_TEMPERATURE_STORAGE_KEY]: 0.5,
 };
 
+export const FLUENT_SETTINGS = {
+  [LANGUAGE_STORAGE_KEY]: "spanish",
+  [TRANSLATION_LEVEL_STORAGE_KEY]: "fluent",
+  [PHRASE_MIN_STORAGE_KEY]: 1,
+  [PHRASE_MAX_STORAGE_KEY]: 10,
+  [PHRASE_COVERAGE_STORAGE_KEY]: 100,
+  [PHRASE_TEMPERATURE_STORAGE_KEY]: 0.7,
+};
+
 export const DEFAULT_SETTINGS = BEGINNER_SETTINGS;
 
 export const SETTINGS_PRESETS = {
@@ -95,21 +119,24 @@ export const SETTINGS_PRESETS = {
   elementary: ELEMENTARY_SETTINGS,
   intermediate: INTERMEDIATE_SETTINGS,
   advanced: ADVANCED_SETTINGS,
+  fluent: FLUENT_SETTINGS,
 };
+
+export function isFullTranslationLevel(translationLevel) {
+  return translationLevel === "fluent";
+}
 
 export function clampNumber(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
 export function normalizeSettings(storedValues = {}) {
-  const translationLevel =
-    storedValues[TRANSLATION_LEVEL_STORAGE_KEY] === "advanced"
-      ? "advanced"
-      : storedValues[TRANSLATION_LEVEL_STORAGE_KEY] === "intermediate"
-        ? "intermediate"
-        : storedValues[TRANSLATION_LEVEL_STORAGE_KEY] === "elementary"
-          ? "elementary"
-          : "beginner";
+  const requestedTranslationLevel = String(
+    storedValues[TRANSLATION_LEVEL_STORAGE_KEY] ?? ""
+  ).toLowerCase();
+  const translationLevel = TRANSLATION_LEVELS.includes(requestedTranslationLevel)
+    ? requestedTranslationLevel
+    : "beginner";
   const levelDefaults = SETTINGS_PRESETS[translationLevel];
   const maxWords = clampNumber(
     Number(storedValues[PHRASE_MAX_STORAGE_KEY] ?? levelDefaults[PHRASE_MAX_STORAGE_KEY]),
@@ -126,7 +153,7 @@ export function normalizeSettings(storedValues = {}) {
   const temperature = clampNumber(
     Number(
       storedValues[PHRASE_TEMPERATURE_STORAGE_KEY] ??
-        levelDefaults[PHRASE_TEMPERATURE_STORAGE_KEY]
+      levelDefaults[PHRASE_TEMPERATURE_STORAGE_KEY]
     ),
     0,
     1
