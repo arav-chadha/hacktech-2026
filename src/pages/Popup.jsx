@@ -1,16 +1,10 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../useAuth";
-import browser from "webextension-polyfill";
 import "./Popup.css";
 import {
   DEFAULT_SETTINGS,
   isFullTranslationLevel,
   LANGUAGE_STORAGE_KEY,
-  PHRASE_COVERAGE_STORAGE_KEY,
-  PHRASE_MAX_STORAGE_KEY,
-  PHRASE_MIN_STORAGE_KEY,
-  PHRASE_TEMPERATURE_STORAGE_KEY,
-  SETTINGS_PRESETS,
   TRANSLATION_LEVEL_STORAGE_KEY,
   normalizeSettings,
 } from "../shared/settings";
@@ -19,12 +13,6 @@ function buildSettingsFromNormalized(normalizedSettings) {
   return {
     [LANGUAGE_STORAGE_KEY]: normalizedSettings[LANGUAGE_STORAGE_KEY],
     [TRANSLATION_LEVEL_STORAGE_KEY]: normalizedSettings[TRANSLATION_LEVEL_STORAGE_KEY],
-    [PHRASE_MIN_STORAGE_KEY]: String(normalizedSettings[PHRASE_MIN_STORAGE_KEY]),
-    [PHRASE_MAX_STORAGE_KEY]: String(normalizedSettings[PHRASE_MAX_STORAGE_KEY]),
-    [PHRASE_COVERAGE_STORAGE_KEY]: String(normalizedSettings[PHRASE_COVERAGE_STORAGE_KEY]),
-    [PHRASE_TEMPERATURE_STORAGE_KEY]: String(
-      normalizedSettings[PHRASE_TEMPERATURE_STORAGE_KEY]
-    ),
   };
 }
 
@@ -34,7 +22,7 @@ export default function Popup() {
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingProfile, setIsLoadingProfile] = useState(false);
   const [userExp, setUserExp] = useState(0);
-  const {email, loading, error, signIn, logout} = useAuth();
+  const {email, loading} = useAuth();
   const usesFullTranslation = isFullTranslationLevel(
     settings[TRANSLATION_LEVEL_STORAGE_KEY]
   );
@@ -92,14 +80,9 @@ export default function Popup() {
 
         const translationLevel = String(response?.translationLevel ?? DEFAULT_SETTINGS[TRANSLATION_LEVEL_STORAGE_KEY]);
         const exp = Number(response?.exp ?? 0);
-        const preset = SETTINGS_PRESETS[translationLevel] ?? DEFAULT_SETTINGS;
         const normalizedSettings = normalizeSettings({
           [LANGUAGE_STORAGE_KEY]: selectedLanguage,
           [TRANSLATION_LEVEL_STORAGE_KEY]: translationLevel,
-          [PHRASE_MIN_STORAGE_KEY]: preset[PHRASE_MIN_STORAGE_KEY],
-          [PHRASE_MAX_STORAGE_KEY]: preset[PHRASE_MAX_STORAGE_KEY],
-          [PHRASE_COVERAGE_STORAGE_KEY]: preset[PHRASE_COVERAGE_STORAGE_KEY],
-          [PHRASE_TEMPERATURE_STORAGE_KEY]: preset[PHRASE_TEMPERATURE_STORAGE_KEY],
         });
 
         setUserExp(exp);
@@ -132,10 +115,6 @@ export default function Popup() {
       const normalizedSettings = normalizeSettings({
         [LANGUAGE_STORAGE_KEY]: settings[LANGUAGE_STORAGE_KEY],
         [TRANSLATION_LEVEL_STORAGE_KEY]: settings[TRANSLATION_LEVEL_STORAGE_KEY],
-        [PHRASE_MIN_STORAGE_KEY]: settings[PHRASE_MIN_STORAGE_KEY],
-        [PHRASE_MAX_STORAGE_KEY]: settings[PHRASE_MAX_STORAGE_KEY],
-        [PHRASE_COVERAGE_STORAGE_KEY]: settings[PHRASE_COVERAGE_STORAGE_KEY],
-        [PHRASE_TEMPERATURE_STORAGE_KEY]: settings[PHRASE_TEMPERATURE_STORAGE_KEY],
       });
 
       await chrome.storage.local.set(normalizedSettings);
@@ -164,7 +143,7 @@ export default function Popup() {
         <p>
           {usesFullTranslation
             ? "Fully translate the page into your target language."
-            : "Translate random phrases with OpenAI and tune phrase selection."}
+            : "Translate the page with difficulty automatically matched to your EXP."}
         </p>
       </div>
 
@@ -198,74 +177,7 @@ export default function Popup() {
         <small>
           {isLoadingProfile
             ? "Loading level from MongoDB..."
-            : `Synced from MongoDB. Current EXP: ${userExp}.`}
-        </small>
-      </label>
-
-      <div className="popup__grid">
-        <label className="popup__field" htmlFor="phrase-min">
-          <span>Min Words</span>
-          <input
-            id="phrase-min"
-            name={PHRASE_MIN_STORAGE_KEY}
-            type="number"
-            min="1"
-            max="1"
-            value={settings[PHRASE_MIN_STORAGE_KEY]}
-            disabled
-            readOnly
-          />
-        </label>
-
-        <label className="popup__field" htmlFor="phrase-max">
-          <span>Max Words</span>
-          <input
-            id="phrase-max"
-            name={PHRASE_MAX_STORAGE_KEY}
-            type="number"
-            min="1"
-            max="10"
-            value={settings[PHRASE_MAX_STORAGE_KEY]}
-            onChange={handleFieldChange}
-            disabled={usesFullTranslation}
-          />
-        </label>
-
-        <label className="popup__field" htmlFor="phrase-coverage">
-          <span>Coverage %</span>
-          <input
-            id="phrase-coverage"
-            name={PHRASE_COVERAGE_STORAGE_KEY}
-            type="number"
-            min="1"
-            max="100"
-            value={settings[PHRASE_COVERAGE_STORAGE_KEY]}
-            onChange={handleFieldChange}
-            disabled={usesFullTranslation}
-          />
-        </label>
-      </div>
-
-      <label className="popup__field" htmlFor="phrase-temperature">
-        <div className="popup__label-row">
-          <span>Length Bias</span>
-          <strong>{Number(settings[PHRASE_TEMPERATURE_STORAGE_KEY]).toFixed(2)}</strong>
-        </div>
-        <input
-          id="phrase-temperature"
-          name={PHRASE_TEMPERATURE_STORAGE_KEY}
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={settings[PHRASE_TEMPERATURE_STORAGE_KEY]}
-          onChange={handleFieldChange}
-          disabled={usesFullTranslation}
-        />
-        <small>
-          {usesFullTranslation
-            ? "Fluent mode ignores phrase-length tuning and translates the full paragraph."
-            : "0 favors shorter phrases. 1 favors longer phrases."}
+            : `Current EXP: ${userExp}.`}
         </small>
       </label>
 
