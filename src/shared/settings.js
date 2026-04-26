@@ -4,7 +4,7 @@ export const PHRASE_MIN_STORAGE_KEY = "phraseMinWords";
 export const PHRASE_MAX_STORAGE_KEY = "phraseMaxWords";
 export const PHRASE_COVERAGE_STORAGE_KEY = "phraseCoveragePercent";
 export const PHRASE_TEMPERATURE_STORAGE_KEY = "phraseLengthTemperature";
-export const GEMMA_MODEL = "gemini-3.1-flash-lite-preview";
+export const OPENAI_MODEL = "gpt-4o-mini";
 
 export const PREPROMPT_SUFFIX = [
     "Keep spacing and punctuation identical to input",

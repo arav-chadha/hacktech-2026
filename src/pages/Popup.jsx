@@ -121,7 +121,7 @@ export default function Popup() {
       <img src="/icon-with-shadow.svg" alt="Language Extension icon" />
       <div className="popup__copy">
         <h1>Language Extension</h1>
-        <p>Translate random phrases with hosted Gemma and tune phrase selection.</p>
+        <p>Translate random phrases with OpenAI and tune phrase selection.</p>
       </div>
 
       <label className="popup__field" htmlFor="language-select">

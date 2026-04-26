@@ -1,7 +1,8 @@
 import http from "node:http";
-import { LOCAL_GEMMA_API_KEY, SERVER_PORT } from "./local-config.js";
+import OpenAI, { APIError } from "openai";
+import * as localConfig from "./local-config.js";
 import {
-  GEMMA_MODEL,
+  OPENAI_MODEL,
   PREPROMPT_ADVANCED,
   PREPROMPT_BEGINNER,
   PREPROMPT_ELEMENTARY,
@@ -9,7 +10,6 @@ import {
   PREPROMPT_SUFFIX,
   normalizeSettings,
 } from "../src/shared/settings.js";
-import { GoogleGenerativeAI, GoogleGenerativeAIFetchError } from "@google/generative-ai";
 import {
   buildMarkerizedTextFromSplitText,
   buildPlainTextFromParsedMarkers,
@@ -18,12 +18,16 @@ import {
   reconstructHtmlFromParsedMarkers,
 } from "../src/shared/translationMarkup.js";
 
-const genAIClient = new GoogleGenerativeAI(LOCAL_GEMMA_API_KEY);
 
 const SERVER_HOST = "127.0.0.1";
+const SERVER_PORT = localConfig.SERVER_PORT;
 const MAX_TRANSLATION_ATTEMPTS = 3;
 const FALLBACK_RETRY_DELAY_MS = 60_000;
 const ALIGNMENT_WORD_PATTERN = /[\p{L}\p{N}\p{M}'’-]+/gu;
+
+const OPENAI_API_KEY =
+  process.env.OPENAI_API_KEY?.trim() || localConfig.LOCAL_OPENAI_API_KEY?.trim() || "";
+const openAIClient = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -136,10 +140,28 @@ function buildAlignmentPrompt(targetLanguage) {
   ].join("\n");
 }
 
-function extractGemmaText(responseJson) {
-  return responseJson?.candidates?.[0]?.content?.parts
-    ?.map((part) => String(part?.text ?? ""))
-    .join("") ?? "";
+function extractOpenAIText(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .map((part) => {
+      if (typeof part === "string") {
+        return part;
+      }
+
+      if (part?.type === "text" && typeof part.text === "string") {
+        return part.text;
+      }
+
+      return "";
+    })
+    .join("");
 }
 
 function tokenizeWords(text) {
@@ -312,28 +334,49 @@ class MarkerValidationError extends Error {
 }
 
 function parseRetryDelayMs(retryDelay) {
+  if (typeof retryDelay === "number" && Number.isFinite(retryDelay)) {
+    return Math.max(0, Math.ceil(retryDelay));
+  }
+
   if (typeof retryDelay !== "string") {
     return null;
   }
 
-  const seconds = Number.parseFloat(retryDelay.replace(/s$/, ""));
-  if (!Number.isFinite(seconds)) {
+  const trimmedRetryDelay = retryDelay.trim();
+  const milliseconds = Number.parseFloat(trimmedRetryDelay);
+  if (Number.isFinite(milliseconds) && /^\d+(\.\d+)?$/.test(trimmedRetryDelay)) {
+    return Math.max(0, Math.ceil(milliseconds));
+  }
+
+  const seconds = Number.parseFloat(trimmedRetryDelay.replace(/s$/, ""));
+  if (Number.isFinite(seconds) && /^\d+(\.\d+)?s?$/.test(trimmedRetryDelay)) {
+    return Math.max(0, Math.ceil(seconds * 1000));
+  }
+
+  const retryAtMs = Date.parse(trimmedRetryDelay);
+  if (Number.isNaN(retryAtMs)) {
     return null;
   }
 
-  return Math.ceil(seconds * 1000);
+  return Math.max(0, retryAtMs - Date.now());
 }
 
 function getRetryDelayMs(error) {
-  const retryInfo = error?.errorDetails?.find(
-    (detail) => detail?.["@type"] === "type.googleapis.com/google.rpc.RetryInfo"
-  );
-  const retryDelayMs = parseRetryDelayMs(retryInfo?.retryDelay);
-  if (retryDelayMs) {
-    return retryDelayMs;
+  if (!(error instanceof APIError)) {
+    return null;
   }
 
-  if (error?.status === 429) {
+  const retryAfterMs = parseRetryDelayMs(error.headers?.get("retry-after-ms"));
+  if (retryAfterMs !== null) {
+    return retryAfterMs;
+  }
+
+  const retryAfter = parseRetryDelayMs(error.headers?.get("retry-after"));
+  if (retryAfter !== null) {
+    return retryAfter;
+  }
+
+  if (error.status === 429) {
     return FALLBACK_RETRY_DELAY_MS;
   }
 
@@ -341,7 +384,7 @@ function getRetryDelayMs(error) {
 }
 
 function toRetryableTranslationError(error) {
-  if (!(error instanceof GoogleGenerativeAIFetchError)) {
+  if (!(error instanceof APIError)) {
     return null;
   }
 
@@ -432,50 +475,48 @@ async function readJsonBody(request) {
   return rawBody ? JSON.parse(rawBody) : {};
 }
 
-async function requestGemmaJson(prompt, payload) {
-  logServerEvent("gemini-json-request-start", {
-    model: GEMMA_MODEL,
+async function requestOpenAIJson(prompt, payload) {
+  if (!openAIClient) {
+    throw new Error("Missing OpenAI API key. Set OPENAI_API_KEY or LOCAL_OPENAI_API_KEY.");
+  }
+
+  logServerEvent("openai-json-request-start", {
+    model: OPENAI_MODEL,
     promptLength: prompt.length,
     payloadLength: payload.length,
   });
 
-  const model = genAIClient.getGenerativeModel(
-    {
-      model: GEMMA_MODEL,
-      systemInstruction: prompt,
-    }
-  );
-  const generationConfig = {
+  const response = await openAIClient.chat.completions.create({
+    model: OPENAI_MODEL,
     temperature: 0,
-    responseMimeType: "application/json",
-  };
-
-  const response = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: payload }] }],
-    generationConfig,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: prompt },
+      { role: "user", content: payload },
+    ],
   });
 
-  const responseText = response.response.text();
-  logServerEvent("gemini-json-request-success", {
-    model: GEMMA_MODEL,
+  const responseText = extractOpenAIText(response.choices?.[0]?.message?.content);
+  logServerEvent("openai-json-request-success", {
+    model: OPENAI_MODEL,
     responseLength: responseText.length,
   });
   return responseText;
 }
 
-async function requestGemmaJsonWithRetries(prompt, payload) {
+async function requestOpenAIJsonWithRetries(prompt, payload) {
   let attempt = 0;
 
   while (attempt < MAX_TRANSLATION_ATTEMPTS) {
     attempt += 1;
 
     try {
-      return await requestGemmaJson(prompt, payload);
+      return await requestOpenAIJson(prompt, payload);
     } catch (error) {
       const retryableError = toRetryableTranslationError(error);
       const canRetry = retryableError && attempt < MAX_TRANSLATION_ATTEMPTS;
 
-      logServerEvent("gemini-json-request-error", {
+      logServerEvent("openai-json-request-error", {
         attempt,
         canRetry: Boolean(canRetry),
         retryDelayMs: retryableError?.retryDelayMs ?? null,
@@ -547,31 +588,29 @@ function beginTranslationStream(response) {
   });
 }
 
-async function requestGemmaStream(prompt, text) {
-  logServerEvent("gemini-stream-request-start", {
-    model: GEMMA_MODEL,
+async function requestOpenAIStream(prompt, text) {
+  if (!openAIClient) {
+    throw new Error("Missing OpenAI API key. Set OPENAI_API_KEY or LOCAL_OPENAI_API_KEY.");
+  }
+
+  logServerEvent("openai-stream-request-start", {
+    model: OPENAI_MODEL,
     promptLength: prompt.length,
     textLength: text.length,
   });
 
-  const model = genAIClient.getGenerativeModel(
-    {
-      model: GEMMA_MODEL,
-      systemInstruction: prompt,
-    }
-  );
-  const generationConfig = {
+  const streamResult = await openAIClient.chat.completions.create({
+    model: OPENAI_MODEL,
     temperature: 0,
-    responseMimeType: "text/plain",
-  };
-
-  const streamResult = await model.generateContentStream({
-    contents: [{ role: "user", parts: [{ "text": text }] }],
-    generationConfig,
+    stream: true,
+    messages: [
+      { role: "system", content: prompt },
+      { role: "user", content: text },
+    ],
   });
 
-  logServerEvent("gemini-stream-request-opened", {
-    model: GEMMA_MODEL,
+  logServerEvent("openai-stream-request-opened", {
+    model: OPENAI_MODEL,
   });
 
   return streamResult;
@@ -606,10 +645,10 @@ async function streamTranslatedParagraph({ splitText, targetLanguage, settings, 
         targetLanguage,
       });
 
-      const streamResult = await requestGemmaStream(prompt, markerizedText);
+      const streamResult = await requestOpenAIStream(prompt, markerizedText);
 
-      for await (const responseChunk of streamResult.stream) {
-        const chunkText = extractGemmaText(responseChunk);
+      for await (const responseChunk of streamResult) {
+        const chunkText = extractOpenAIText(responseChunk.choices?.[0]?.delta?.content);
         if (!chunkText) {
           continue;
         }
@@ -641,7 +680,6 @@ async function streamTranslatedParagraph({ splitText, targetLanguage, settings, 
         }
       }
 
-      await streamResult.response;
       const parsedTranslation = parseTranslatedMarkerizedText(streamedMarkerizedText, segments);
       if (!parsedTranslation.ok) {
         logServerEvent("translation-final-parse-error", {

@@ -116,7 +116,7 @@ chrome.runtime.onConnect.addListener((port) => {
         }
       },
     }).catch((error) => {
-      console.error("Gemma translation stream failed:", error);
+      console.error("OpenAI translation stream failed:", error);
       port.postMessage({ type: "error", error: error.message });
     });
   });

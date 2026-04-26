@@ -566,7 +566,7 @@ async function translateSelection(selection, settings) {
 
         port.onMessage.addListener((message) => {
             if (message?.type === "error") {
-                console.error("Gemma translation error:", message.error);
+                console.error("OpenAI translation error:", message.error);
                 if (!hasRenderedChunk && selection.node.isConnected) {
                     restoreOriginalParagraphHtml(selection.node, originalHtml);
                 }
