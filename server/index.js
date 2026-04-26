@@ -44,6 +44,7 @@ import { resolveDashboardOrigin } from "./dashboardConfig.js";
 import {
   getDashboardLanguages,
   getDashboardOverview,
+  getDashboardSemanticMap,
   getDashboardSettings,
   getDashboardVocabularyEntries,
   sanitizeDashboardSettings,
@@ -201,6 +202,8 @@ async function findStoredWordEmbedding({
       projection: {
         _id: 0,
         word: 1,
+        sourceWord: 1,
+        sourceWordNormalized: 1,
         targetLanguage: 1,
         userEmail: 1,
         embedding: 1,
@@ -214,6 +217,7 @@ async function findStoredWordEmbedding({
 async function storeWordEmbedding({
   userEmail,
   word,
+  sourceWord,
   targetLanguage,
   embedding,
 }) {
@@ -223,7 +227,9 @@ async function storeWordEmbedding({
 
   const userEmailLower = normalizeEmail(userEmail);
   const normalizedWord = String(word ?? "").trim();
+  const normalizedSourceWord = String(sourceWord ?? "").trim();
   const wordNormalized = normalizeWord(word);
+  const sourceWordNormalized = normalizeWord(sourceWord);
   const normalizedTargetLanguage = normalizeTargetLanguage(targetLanguage);
 
   if (
@@ -262,6 +268,8 @@ async function storeWordEmbedding({
         updatedAt: now,
         userEmail: String(userEmail ?? "").trim(),
         word: normalizedWord,
+        sourceWord: normalizedSourceWord || normalizedWord,
+        sourceWordNormalized: sourceWordNormalized || wordNormalized,
         embedding,
       },
     },
@@ -1120,9 +1128,16 @@ async function handleDashboardRequest({
   }
 
   if (pathname === "/dashboard/semantic-map" && request.method === "GET") {
+    const settings = await getDashboardSettings({
+      userEmail: session.email,
+    });
+    const snapshot = await getDashboardSemanticMap({
+      userEmail: session.email,
+      settings,
+    });
+
     sendDashboardJson(response, requestOrigin, 200, {
-      snapshot: null,
-      message: "Semantic graph data is not available from the backend yet.",
+      snapshot,
     });
     return true;
   }
@@ -1578,12 +1593,15 @@ const server = http.createServer(async (request, response) => {
       const body = await readJsonBody(request);
       const userEmail = String(body?.userEmail ?? "").trim();
       const word = String(body?.word ?? "").trim();
+      const sourceWord = String(body?.sourceWord ?? "").trim();
       const targetLanguage = normalizeTargetLanguage(body?.targetLanguage);
       logServerEvent("embed-request-received", {
         hasUserEmail: Boolean(userEmail),
         hasWord: Boolean(word),
+        hasSourceWord: Boolean(sourceWord),
         hasTargetLanguage: Boolean(targetLanguage),
         word,
+        sourceWord,
         targetLanguage,
       });
 
@@ -1591,6 +1609,7 @@ const server = http.createServer(async (request, response) => {
         logServerEvent("embed-request-invalid", {
           hasUserEmail: Boolean(userEmail),
           hasWord: Boolean(word),
+          hasSourceWord: Boolean(sourceWord),
           hasTargetLanguage: Boolean(targetLanguage),
         });
         sendJson(response, 400, { error: "userEmail, word, and targetLanguage are required." });
@@ -1620,8 +1639,19 @@ const server = http.createServer(async (request, response) => {
       });
 
       if (existingEmbedding?.embedding) {
+        if (sourceWord && normalizeWord(existingEmbedding.sourceWord) !== normalizeWord(sourceWord)) {
+          await storeWordEmbedding({
+            userEmail,
+            word,
+            sourceWord,
+            targetLanguage,
+            embedding: existingEmbedding.embedding,
+          });
+        }
+
         logServerEvent("embed-cache-hit", {
           word,
+          sourceWord,
           targetLanguage,
           userEmail,
         });
@@ -1630,6 +1660,7 @@ const server = http.createServer(async (request, response) => {
           cached: true,
           embedding: existingEmbedding.embedding,
           word: existingEmbedding.word ?? word,
+          sourceWord: existingEmbedding.sourceWord ?? sourceWord ?? word,
           targetLanguage: existingEmbedding.targetLanguage ?? targetLanguage,
           userEmail: existingEmbedding.userEmail ?? userEmail,
         });
@@ -1659,6 +1690,7 @@ const server = http.createServer(async (request, response) => {
       const storeResult = await storeWordEmbedding({
         userEmail,
         word,
+        sourceWord,
         targetLanguage,
         embedding,
       });
@@ -1683,6 +1715,7 @@ const server = http.createServer(async (request, response) => {
         cached: false,
         embedding,
         word,
+        sourceWord: sourceWord || word,
         targetLanguage,
         userEmail,
       });

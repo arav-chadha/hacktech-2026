@@ -426,7 +426,7 @@ function getLookupCacheKey(targetLanguage, word) {
     return `${targetLanguage}::${normalizeWhitespace(word).toLocaleLowerCase()}`;
 }
 
-async function fetchWordLookup(word, targetLanguage) {
+async function fetchWordLookup(word, targetLanguage, sourceWord = "") {
     return new Promise((resolve, reject) => {
         chrome.runtime.sendMessage(
             {
@@ -434,7 +434,8 @@ async function fetchWordLookup(word, targetLanguage) {
                 payload: {
                     word,
                     targetLanguage,
-                    userEmail
+                    userEmail,
+                    sourceWord,
                 },
             },
             (response) => {
@@ -530,6 +531,7 @@ async function playLookupAudio(targetElement) {
 async function showLookupCardForToken(alignedToken) {
     const targetWord = alignedToken.dataset.targetText;
     const targetLanguage = alignedToken.dataset.targetLanguage;
+    const sourceWord = alignedToken.dataset.sourceText || "";
 
     if (!targetWord || !targetLanguage) {
         renderLookupCard(alignedToken, null);
@@ -551,7 +553,7 @@ async function showLookupCardForToken(alignedToken) {
     const requestId = ++activeLookupRequestId;
 
     try {
-        const lookup = await fetchWordLookup(targetWord, targetLanguage);
+        const lookup = await fetchWordLookup(targetWord, targetLanguage, sourceWord);
         lookupCache.set(cacheKey, lookup);
 
         if (requestId !== activeLookupRequestId || !alignedToken.matches(":hover")) {

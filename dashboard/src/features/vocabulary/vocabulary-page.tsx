@@ -82,23 +82,31 @@ export function VocabularyPage() {
 
   const relatedSemanticEntries =
     selectedSemanticNode?.kind === "learned-word"
-      ? entries.filter(
-          (entry) =>
-            entry.sourceWord.toLowerCase() === selectedSemanticNode.sourceWord.toLowerCase() ||
-            entry.learnedWord.toLowerCase() === selectedSemanticNode.learnedWord.toLowerCase()
-        )
+      ? (() => {
+          const matchingEntries = entries.filter(
+            (entry) =>
+              entry.sourceWord.toLowerCase() === selectedSemanticNode.sourceWord.toLowerCase() ||
+              entry.learnedWord.toLowerCase() === selectedSemanticNode.learnedWord.toLowerCase()
+          );
+
+          return matchingEntries.length > 0 ? matchingEntries : entries;
+        })()
       : selectedSemanticNode?.kind === "anchor" && semanticMap
-        ? entries.filter((entry) =>
-            semanticMap.nodes.some(
-              (node) =>
-                node.kind === "learned-word" &&
-                node.anchorId === selectedSemanticNode.id &&
-                (
-                  node.sourceWord.toLowerCase() === entry.sourceWord.toLowerCase() ||
-                  node.learnedWord.toLowerCase() === entry.learnedWord.toLowerCase()
-                )
-            )
-          )
+        ? (() => {
+            const matchingEntries = entries.filter((entry) =>
+              semanticMap.nodes.some(
+                (node) =>
+                  node.kind === "learned-word" &&
+                  node.anchorId === selectedSemanticNode.id &&
+                  (
+                    node.sourceWord.toLowerCase() === entry.sourceWord.toLowerCase() ||
+                    node.learnedWord.toLowerCase() === entry.learnedWord.toLowerCase()
+                  )
+              )
+            );
+
+            return matchingEntries.length > 0 ? matchingEntries : entries;
+          })()
         : entries;
 
   const languageLabels = useMemo(
@@ -132,6 +140,14 @@ export function VocabularyPage() {
     const visibleLinks = semanticMap.links.filter(
       (link) => visibleNodeIds.has(link.source) && visibleNodeIds.has(link.target)
     );
+
+    const visibleLearnedNodeCount = visibleNodes.filter((node) => node.kind === "learned-word").length;
+    if (
+      visibleLearnedNodeCount === 0 &&
+      semanticMap.nodes.some((node) => node.kind === "learned-word")
+    ) {
+      return semanticMap;
+    }
 
     return {
       ...semanticMap,
