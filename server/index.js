@@ -781,9 +781,16 @@ function expandAlignmentRecord(alignment, sourceTokens, targetTokens) {
     ).filter(Boolean);
   }
 
-  // For uneven spans, emit one alignment per target token using a monotonic
-  // proportional mapping into the source span. This keeps underline coverage
-  // complete while avoiding large shared phrase tooltips.
+  // When the token counts do not match, keep compact phrase alignments for
+  // compressed/expanded expressions like "en marzo de" -> "March" or
+  // "otro miembro" -> "other member".
+  if (sourceCount === 1 || targetCount === 1 || Math.max(sourceCount, targetCount) <= 3) {
+    return [alignment];
+  }
+
+  // For larger uneven spans, emit one alignment per target token using a
+  // monotonic proportional mapping into the source span. This keeps underline
+  // coverage complete while avoiding large shared phrase tooltips.
   return Array.from({ length: targetCount }, (_, targetOffset) => {
     const targetIndex = alignment.targetStart + targetOffset;
     const sourceOffset =
