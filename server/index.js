@@ -18,6 +18,8 @@ import {
   parseTranslatedMarkerizedText,
   reconstructHtmlFromParsedMarkers,
 } from "../src/shared/translationMarkup.js";
+import { getPriorityWordsForPrompt, recordWordFeedback } from "./learningStore.js";
+import { hasMongoConfig } from "./mongo.js";
 
 
 const SERVER_HOST = "127.0.0.1";
@@ -96,7 +98,7 @@ function getPromptSuffix(translationLevel) {
     .join("\n");
 }
 
-function buildTranslationPrompt(targetLanguage, settings) {
+function buildTranslationPrompt(targetLanguage, settings, priorityWords = []) {
   const translationLevel = settings?.translationLevel ?? "beginner";
   const minWords = settings?.phraseMinWords ?? 1;
   const maxWords = settings?.phraseMaxWords ?? 4;
@@ -110,7 +112,6 @@ function buildTranslationPrompt(targetLanguage, settings) {
           `Translate about ${maxCoveragePercent}% of the words in the paragraph.`,
           "Longer continuous translated spans are allowed when they sound natural.",
           describeLengthBias(settings?.phraseLengthTemperature ?? 0.5),
-          getPromptSuffix(translationLevel),
         ]
       : [
           `Partially translate the input into ${targetLanguage}.`,
@@ -123,9 +124,19 @@ function buildTranslationPrompt(targetLanguage, settings) {
             ? "Allow longer continuous translated spans when they sound natural."
             : "Prefer multiple isolated translated spans instead of one large translated chunk.",
           describeLengthBias(settings?.phraseLengthTemperature ?? 0.5),
-          getPromptSuffix(translationLevel),
         ];
 
+  if (priorityWords.length > 0) {
+    promptLines.push(
+      "If any of these English source terms appear in the input, prioritize translating them before other eligible words."
+    );
+    promptLines.push(
+      `Priority words present in this paragraph: ${priorityWords
+        .map((word) => word.sourceWord)
+        .join(", ")}`
+    );
+  }
+  promptLines.push(getPromptSuffix(translationLevel));
   return promptLines.join("\n");
 }
 
@@ -919,13 +930,19 @@ async function requestOpenAIStream(prompt, text) {
   return streamResult;
 }
 
-async function streamTranslatedParagraph({ splitText, targetLanguage, settings, onChunk }) {
+async function streamTranslatedParagraph({
+  splitText,
+  targetLanguage,
+  settings,
+  priorityWords,
+  onChunk,
+}) {
   const { markerizedText, segments } = buildMarkerizedTextFromSplitText(splitText);
   if (!markerizedText) {
     throw new Error("Paragraph did not contain any translatable text.");
   }
 
-  const prompt = buildTranslationPrompt(targetLanguage, settings);
+  const prompt = buildTranslationPrompt(targetLanguage, settings, priorityWords);
   let attempt = 0;
 
   logServerEvent("translation-start", {
@@ -1064,7 +1081,30 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (request.url === "/health" && request.method === "GET") {
-    sendJson(response, 200, { ok: true });
+    sendJson(response, 200, { ok: true, mongoEnabled: hasMongoConfig() });
+    return;
+  }
+
+  if (request.url === "/word-feedback" && request.method === "POST") {
+    try {
+      const body = await readJsonBody(request);
+      const result = await recordWordFeedback({
+        userEmail: body?.userEmail,
+        targetLanguage: body?.targetLanguage,
+        sourceTerm: body?.sourceTerm,
+      });
+
+      if (!result.ok && !result.disabled) {
+        sendJson(response, 400, { error: "userEmail, targetLanguage, and sourceTerm are required." });
+        return;
+      }
+
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendJson(response, 500, {
+        error: error?.message ?? String(error),
+      });
+    }
     return;
   }
 
@@ -1107,6 +1147,7 @@ const server = http.createServer(async (request, response) => {
     const splitText = body?.splitText;
     const rawText = body?.rawText;
     const targetLanguage = String(body?.targetLanguage ?? "").trim();
+    const userEmail = String(body?.userEmail ?? "").trim();
     const normalizedSettings = normalizeSettings({
       selectedLanguage: targetLanguage,
       translationLevel: body?.translationLevel,
@@ -1120,6 +1161,7 @@ const server = http.createServer(async (request, response) => {
       method: request.method,
       url: request.url,
       targetLanguage,
+      userEmailPresent: Boolean(userEmail),
       splitTextCount: Array.isArray(splitText) ? splitText.length : null,
       rawTextLength: typeof rawText === "string" ? rawText.length : null,
       translationLevel: normalizedSettings.translationLevel,
@@ -1145,12 +1187,19 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    const priorityWords = await getPriorityWordsForPrompt({
+      userEmail,
+      targetLanguage,
+      sourceText,
+    });
+
     beginTranslationStream(response);
 
     const translation = await streamTranslatedParagraph({
       splitText,
       targetLanguage,
       settings: normalizedSettings,
+      priorityWords,
       onChunk(partialTranslation) {
         logServerEvent("http-translate-stream-chunk", {
           targetLanguage,

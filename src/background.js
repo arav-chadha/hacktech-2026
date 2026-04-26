@@ -45,6 +45,7 @@ async function streamTranslation({
   phraseMaxWords,
   phraseCoveragePercent,
   phraseLengthTemperature,
+  userEmail,
   onEvent,
 }) {
   const response = await fetch(BACKEND_TRANSLATE_ENDPOINT, {
@@ -61,6 +62,7 @@ async function streamTranslation({
       phraseMaxWords,
       phraseCoveragePercent,
       phraseLengthTemperature,
+      userEmail,
     }),
   });
 

@@ -1,10 +1,5 @@
 import {
     DEFAULT_SETTINGS,
-    LANGUAGE_STORAGE_KEY,
-    PHRASE_COVERAGE_STORAGE_KEY,
-    PHRASE_MAX_STORAGE_KEY,
-    PHRASE_MIN_STORAGE_KEY,
-    PHRASE_TEMPERATURE_STORAGE_KEY,
     normalizeSettings,
 } from "../shared/settings";
 import {
@@ -16,6 +11,7 @@ const ALIGNMENT_TOKEN_ATTR = "data-language-extension-alignment-token";
 const LOOKUP_CARD_ID = "language-extension-lookup-card";
 const STYLE_ID = "language-extension-alignment-style";
 const LOOKUP_HOVER_DELAY_MS = 500;
+const WORD_FEEDBACK_ENDPOINT = "http://127.0.0.1:8787/word-feedback";
 
 const processedNodes = new WeakSet();
 const PROCESSED_ATTR = "data-language-extension-processed";
@@ -63,6 +59,8 @@ let userEmail = null;
 const lookupCache = new Map();
 let activeLookupRequestId = 0;
 let activeLookupHoverTimeout = null;
+
+let activeSettings = { ...DEFAULT_SETTINGS };
 
 chrome.storage.local.get("userEmail", (data) => {
   console.log("Fetching email");
@@ -645,6 +643,63 @@ function installAlignmentInteractions() {
         clearLookupHoverTimeout();
         hideLookupCard();
     });
+
+    document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        const alignedToken = target.closest(`[${ALIGNMENT_TOKEN_ATTR}]`);
+        if (!(alignedToken instanceof HTMLElement)) {
+            return;
+        }
+
+        void sendWordFeedback({
+            userEmail,
+            targetLanguage: activeSettings.selectedLanguage,
+            sourceTerm: alignedToken.dataset.sourceText,
+        });
+    });
+}
+
+async function sendWordFeedback({
+    userEmail,
+    targetLanguage,
+    sourceTerm,
+}) {
+    if (!userEmail || !targetLanguage || !sourceTerm) {
+        console.warn("Skipping word feedback due to missing fields.", {
+            hasUserEmail: Boolean(userEmail),
+            hasTargetLanguage: Boolean(targetLanguage),
+            hasSourceTerm: Boolean(sourceTerm),
+        });
+        return;
+    }
+
+    try {
+        const response = await fetch(WORD_FEEDBACK_ENDPOINT, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                userEmail,
+                targetLanguage,
+                sourceTerm,
+            }),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("Word feedback request failed:", {
+                status: response.status,
+                errorText,
+            });
+        }
+    } catch (error) {
+        console.error("Failed to record word feedback:", error);
+    }
 }
 
 function getParagraphSelection(node) {
@@ -760,6 +815,7 @@ async function translateSelection(selection, settings) {
                 phraseMaxWords: settings.phraseMaxWords,
                 phraseCoveragePercent: settings.phraseCoveragePercent,
                 phraseLengthTemperature: settings.phraseLengthTemperature,
+                userEmail,
             },
         });
     });
@@ -840,6 +896,7 @@ async function loadSettings() {
 
 async function init() {
     const settings = await loadSettings();
+    activeSettings = settings;
     installAlignmentInteractions();
     const processingRoot = getProcessingRoot();
     await walkAndProcess(processingRoot, settings);
