@@ -1,4 +1,10 @@
-import { ensureMongoIndexes, getCollectionNames, getMongoDatabase, hasMongoConfig } from "./mongo.js";
+import {
+  ensureLanguageStatsIndexes,
+  ensureMongoIndexes,
+  getCollectionNames,
+  getMongoDatabase,
+  hasMongoConfig,
+} from "./mongo.js";
 
 const TERM_PATTERN = /\b[\p{L}\p{N}'’-]+\b/gu;
 
@@ -128,4 +134,57 @@ export async function recordWordFeedback({
   );
 
   return { ok: true, disabled: false };
+}
+
+export async function recordTranslatedWordExp({
+  userEmail,
+  targetLanguage,
+  translatedWordCount,
+}) {
+  if (!hasMongoConfig()) {
+    return { ok: false, disabled: true, expAdded: 0 };
+  }
+
+  const userEmailLower = normalizeEmail(userEmail);
+  const normalizedLanguage = normalizeWhitespace(targetLanguage);
+  const expToAdd = Math.max(0, Number.parseInt(translatedWordCount, 10) || 0);
+
+  if (!userEmailLower || !normalizedLanguage || expToAdd <= 0) {
+    return { ok: false, disabled: false, expAdded: 0 };
+  }
+
+  await ensureLanguageStatsIndexes();
+  const db = await getMongoDatabase();
+  if (!db) {
+    return { ok: false, disabled: true, expAdded: 0 };
+  }
+
+  const { userLanguageStats } = getCollectionNames();
+  const now = new Date();
+
+  await db.collection(userLanguageStats).updateOne(
+    {
+      userEmailLower,
+      targetLanguage: normalizedLanguage,
+    },
+    {
+      $setOnInsert: {
+        createdAt: now,
+        userEmailLower,
+        targetLanguage: normalizedLanguage,
+      },
+      $set: {
+        updatedAt: now,
+        lastTranslatedAt: now,
+      },
+      $inc: {
+        exp: expToAdd,
+      },
+    },
+    {
+      upsert: true,
+    }
+  );
+
+  return { ok: true, disabled: false, expAdded: expToAdd };
 }

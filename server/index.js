@@ -20,7 +20,11 @@ import {
   parseTranslatedMarkerizedText,
   reconstructHtmlFromParsedMarkers,
 } from "../src/shared/translationMarkup.js";
-import { getPriorityWordsForPrompt, recordWordFeedback } from "./learningStore.js";
+import {
+  getPriorityWordsForPrompt,
+  recordTranslatedWordExp,
+  recordWordFeedback,
+} from "./learningStore.js";
 import { hasMongoConfig } from "./mongo.js";
 
 
@@ -223,6 +227,29 @@ function tokenizeWords(text) {
     start: match.index ?? 0,
     end: (match.index ?? 0) + match[0].length,
   }));
+}
+
+function countTranslatedSourceWords(alignments) {
+  if (!Array.isArray(alignments) || alignments.length === 0) {
+    return 0;
+  }
+
+  const translatedSourceIndexes = new Set();
+
+  for (const alignment of alignments) {
+    const sourceStart = Number(alignment?.sourceStart);
+    const sourceEnd = Number(alignment?.sourceEnd);
+
+    if (!Number.isInteger(sourceStart) || !Number.isInteger(sourceEnd) || sourceEnd < sourceStart) {
+      continue;
+    }
+
+    for (let sourceIndex = sourceStart; sourceIndex <= sourceEnd; sourceIndex += 1) {
+      translatedSourceIndexes.add(sourceIndex);
+    }
+  }
+
+  return translatedSourceIndexes.size;
 }
 
 function joinTokenText(tokens, start, end) {
@@ -1331,6 +1358,31 @@ const server = http.createServer(async (request, response) => {
         errorName: alignmentError?.name ?? null,
         errorMessage: alignmentError?.message ?? String(alignmentError),
       });
+    }
+
+    const translatedWordCount = countTranslatedSourceWords(translation.alignments);
+    if (userEmail && translatedWordCount > 0) {
+      try {
+        const expResult = await recordTranslatedWordExp({
+          userEmail,
+          targetLanguage,
+          translatedWordCount,
+        });
+
+        logServerEvent("translation-exp-recorded", {
+          targetLanguage,
+          userEmailPresent: true,
+          translatedWordCount,
+          expAdded: expResult.expAdded,
+        });
+      } catch (expError) {
+        logServerEvent("translation-exp-record-error", {
+          targetLanguage,
+          translatedWordCount,
+          errorName: expError?.name ?? null,
+          errorMessage: expError?.message ?? String(expError),
+        });
+      }
     }
 
     writeStreamEvent(response, {

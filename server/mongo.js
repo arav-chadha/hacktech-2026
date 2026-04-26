@@ -2,9 +2,11 @@ import { MongoClient, ServerApiVersion } from "mongodb";
 import { MONGODB_DB_NAME, MONGODB_URI } from "./local-config.js";
 
 const USER_WORD_STATS_COLLECTION = "user_word_stats";
+const USER_LANGUAGE_STATS_COLLECTION = "user_language_stats";
 
 let mongoClientPromise = null;
-let indexesPromise = null;
+let wordIndexesPromise = null;
+let languageIndexesPromise = null;
 
 export function hasMongoConfig() {
   return Boolean(String(MONGODB_URI ?? "").trim());
@@ -54,11 +56,11 @@ async function ensureCollectionExists(db, collectionName) {
 }
 
 export async function ensureMongoIndexes() {
-  if (indexesPromise) {
-    return indexesPromise;
+  if (wordIndexesPromise) {
+    return wordIndexesPromise;
   }
 
-  indexesPromise = (async () => {
+  wordIndexesPromise = (async () => {
     const db = await getMongoDatabase();
     if (!db) {
       return;
@@ -108,15 +110,76 @@ export async function ensureMongoIndexes() {
 
     await collection.createIndexes(desiredIndexes);
   })().catch((error) => {
-    indexesPromise = null;
+    wordIndexesPromise = null;
     throw error;
   });
 
-  return indexesPromise;
+  return wordIndexesPromise;
+}
+
+export async function ensureLanguageStatsIndexes() {
+  if (languageIndexesPromise) {
+    return languageIndexesPromise;
+  }
+
+  languageIndexesPromise = (async () => {
+    const db = await getMongoDatabase();
+    if (!db) {
+      return;
+    }
+
+    await ensureCollectionExists(db, USER_LANGUAGE_STATS_COLLECTION);
+
+    const collection = db.collection(USER_LANGUAGE_STATS_COLLECTION);
+    const desiredIndexes = [
+      {
+        key: {
+          userEmailLower: 1,
+          targetLanguage: 1,
+        },
+        unique: true,
+        name: "user_language_stats_unique",
+      },
+      {
+        key: {
+          userEmailLower: 1,
+          exp: -1,
+          updatedAt: -1,
+        },
+        name: "user_language_stats_exp_lookup",
+      },
+    ];
+
+    const existingIndexes = await collection.indexes();
+    const existingByName = new Map(existingIndexes.map((index) => [index.name, index]));
+
+    for (const desiredIndex of desiredIndexes) {
+      const existingIndex = existingByName.get(desiredIndex.name);
+      if (!existingIndex) {
+        continue;
+      }
+
+      const sameKey =
+        JSON.stringify(existingIndex.key) === JSON.stringify(desiredIndex.key);
+      const sameUniqueness = Boolean(existingIndex.unique) === Boolean(desiredIndex.unique);
+
+      if (!sameKey || !sameUniqueness) {
+        await collection.dropIndex(desiredIndex.name);
+      }
+    }
+
+    await collection.createIndexes(desiredIndexes);
+  })().catch((error) => {
+    languageIndexesPromise = null;
+    throw error;
+  });
+
+  return languageIndexesPromise;
 }
 
 export function getCollectionNames() {
   return {
+    userLanguageStats: USER_LANGUAGE_STATS_COLLECTION,
     userWordStats: USER_WORD_STATS_COLLECTION,
   };
 }
