@@ -176,9 +176,9 @@ export default function Popup() {
 
   return (
     <form className="popup" onSubmit={handleSave}>
-      <div className="popup__brand-mark" aria-hidden="true">
+      {/* <div className="popup__brand-mark" aria-hidden="true">
         <img src="/icon-with-shadow.svg" alt="" />
-      </div>
+      </div> */}
 
       <div className="popup__copy">
         <span className="popup__eyebrow">WordLoom</span>
