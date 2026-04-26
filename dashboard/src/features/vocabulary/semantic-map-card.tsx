@@ -97,10 +97,10 @@ type MapStyleState = {
 const ANCHOR_COLOR = "#94a3b8";
 
 const DEFAULT_LANGUAGE_COLORS: Record<string, string> = {
-  es: "#bd765e",
-  fr: "#8c7468",
-  de: "#b99059",
-  ja: "#6f9075",
+  es: "#ef4444",
+  fr: "#2563eb",
+  ru: "#7c3aed",
+  zh: "#10b981",
 };
 
 const DEFAULT_MAP_STYLES: MapStyleState = {

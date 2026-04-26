@@ -18,8 +18,8 @@ export const DEFAULT_SETTINGS: StudySettings = {
 export const AVAILABLE_LANGUAGES: StudyLanguage[] = [
   { code: "es", label: "Spanish", locale: "es-ES" },
   { code: "fr", label: "French", locale: "fr-FR" },
-  { code: "de", label: "German", locale: "de-DE" },
-  { code: "ja", label: "Japanese", locale: "ja-JP" },
+  { code: "ru", label: "Russian", locale: "ru-RU" },
+  { code: "zh", label: "Mandarin", locale: "zh-CN" },
 ];
 
 type WordSeed = {
@@ -35,41 +35,41 @@ const WORD_SEEDS: Record<string, WordSeed[]> = {
     { sourceWord: "journey", learnedWord: "viaje", level: "Beginner", daysAgo: 44, status: "Confident" },
     { sourceWord: "library", learnedWord: "biblioteca", level: "Beginner", daysAgo: 39, status: "Confident" },
     { sourceWord: "development", learnedWord: "desarrollo", level: "Intermediate", daysAgo: 32, status: "Practicing" },
-    { sourceWord: "challenge", learnedWord: "desafío", level: "Intermediate", daysAgo: 21, status: "Practicing" },
+    { sourceWord: "challenge", learnedWord: "desafio", level: "Intermediate", daysAgo: 21, status: "Practicing" },
     { sourceWord: "agreement", learnedWord: "acuerdo", level: "Intermediate", daysAgo: 19, status: "Confident" },
     { sourceWord: "neighborhood", learnedWord: "vecindario", level: "Intermediate", daysAgo: 15, status: "New" },
     { sourceWord: "schedule", learnedWord: "horario", level: "Advanced", daysAgo: 11, status: "Practicing" },
     { sourceWord: "threshold", learnedWord: "umbral", level: "Advanced", daysAgo: 4, status: "New" },
   ],
   fr: [
-    { sourceWord: "window", learnedWord: "fenêtre", level: "Beginner", daysAgo: 48, status: "Confident" },
-    { sourceWord: "friendship", learnedWord: "amitié", level: "Beginner", daysAgo: 37, status: "Practicing" },
-    { sourceWord: "writing", learnedWord: "rédaction", level: "Intermediate", daysAgo: 30, status: "New" },
-    { sourceWord: "progress", learnedWord: "progrès", level: "Intermediate", daysAgo: 24, status: "Practicing" },
+    { sourceWord: "window", learnedWord: "fenetre", level: "Beginner", daysAgo: 48, status: "Confident" },
+    { sourceWord: "friendship", learnedWord: "amitie", level: "Beginner", daysAgo: 37, status: "Practicing" },
+    { sourceWord: "writing", learnedWord: "redaction", level: "Intermediate", daysAgo: 30, status: "New" },
+    { sourceWord: "progress", learnedWord: "progres", level: "Intermediate", daysAgo: 24, status: "Practicing" },
     { sourceWord: "careful", learnedWord: "soigneux", level: "Advanced", daysAgo: 10, status: "New" },
-    { sourceWord: "thoughtful", learnedWord: "réfléchi", level: "Advanced", daysAgo: 6, status: "Practicing" },
+    { sourceWord: "thoughtful", learnedWord: "reflechi", level: "Advanced", daysAgo: 6, status: "Practicing" },
   ],
-  de: [
-    { sourceWord: "question", learnedWord: "Frage", level: "Beginner", daysAgo: 41, status: "Confident" },
-    { sourceWord: "confidence", learnedWord: "Zuversicht", level: "Intermediate", daysAgo: 34, status: "Practicing" },
-    { sourceWord: "directory", learnedWord: "Verzeichnis", level: "Intermediate", daysAgo: 27, status: "New" },
-    { sourceWord: "growth", learnedWord: "Wachstum", level: "Advanced", daysAgo: 14, status: "Practicing" },
-    { sourceWord: "insight", learnedWord: "Erkenntnis", level: "Advanced", daysAgo: 7, status: "New" },
+  ru: [
+    { sourceWord: "question", learnedWord: "vopros", level: "Beginner", daysAgo: 41, status: "Confident" },
+    { sourceWord: "confidence", learnedWord: "uverennost", level: "Intermediate", daysAgo: 34, status: "Practicing" },
+    { sourceWord: "directory", learnedWord: "katalog", level: "Intermediate", daysAgo: 27, status: "New" },
+    { sourceWord: "growth", learnedWord: "rost", level: "Advanced", daysAgo: 14, status: "Practicing" },
+    { sourceWord: "insight", learnedWord: "ponimanie", level: "Advanced", daysAgo: 7, status: "New" },
   ],
-  ja: [
-    { sourceWord: "book", learnedWord: "本", level: "Beginner", daysAgo: 45, status: "Confident" },
-    { sourceWord: "study", learnedWord: "勉強", level: "Beginner", daysAgo: 36, status: "Practicing" },
-    { sourceWord: "review", learnedWord: "復習", level: "Intermediate", daysAgo: 29, status: "Practicing" },
-    { sourceWord: "curiosity", learnedWord: "好奇心", level: "Intermediate", daysAgo: 20, status: "New" },
-    { sourceWord: "language", learnedWord: "言語", level: "Advanced", daysAgo: 9, status: "New" },
+  zh: [
+    { sourceWord: "book", learnedWord: "shu", level: "Beginner", daysAgo: 45, status: "Confident" },
+    { sourceWord: "study", learnedWord: "xuexi", level: "Beginner", daysAgo: 36, status: "Practicing" },
+    { sourceWord: "review", learnedWord: "fuxi", level: "Intermediate", daysAgo: 29, status: "Practicing" },
+    { sourceWord: "curiosity", learnedWord: "haoqixin", level: "Intermediate", daysAgo: 20, status: "New" },
+    { sourceWord: "language", learnedWord: "yuyan", level: "Advanced", daysAgo: 9, status: "New" },
   ],
 };
 
 const LANGUAGE_PROGRESS_MULTIPLIER: Record<string, number> = {
   es: 1.05,
   fr: 0.9,
-  de: 0.82,
-  ja: 0.72,
+  ru: 0.82,
+  zh: 0.72,
 };
 
 const LEVEL_OFFSET: Record<LearningLevel, number> = {

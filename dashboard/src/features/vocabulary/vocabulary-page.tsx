@@ -25,6 +25,38 @@ const DEFAULT_FILTERS: VocabularyFilters = {
   sortDirection: "desc",
 };
 
+function matchesGraphLearnedNodeFilters(
+  node: Extract<SemanticGraphNode, { kind: "learned-word" }>,
+  filters: VocabularyFilters,
+  normalizedSearchQuery: string
+) {
+  const matchesQuery =
+    normalizedSearchQuery.length === 0 ||
+    node.label.toLowerCase().includes(normalizedSearchQuery) ||
+    node.sourceWord.toLowerCase().includes(normalizedSearchQuery) ||
+    node.learnedWord.toLowerCase().includes(normalizedSearchQuery);
+  const matchesLanguage =
+    filters.languageCode === "all" || node.languageCode === filters.languageCode;
+  const matchesLevel = filters.level === "all" || node.level === filters.level;
+  const matchesStatus = filters.status === "all" || node.status === filters.status;
+
+  return matchesQuery && matchesLanguage && matchesLevel && matchesStatus;
+}
+
+function matchesAnchorSearch(
+  node: Extract<SemanticGraphNode, { kind: "anchor" }>,
+  normalizedSearchQuery: string
+) {
+  if (normalizedSearchQuery.length === 0) {
+    return false;
+  }
+
+  return (
+    node.label.toLowerCase().includes(normalizedSearchQuery) ||
+    node.definition.toLowerCase().includes(normalizedSearchQuery)
+  );
+}
+
 export function VocabularyPage() {
   const { repository, languages, settings } = useDashboard();
   const [filters, setFilters] = useState<VocabularyFilters>(DEFAULT_FILTERS);
@@ -119,42 +151,36 @@ export function VocabularyPage() {
       return null;
     }
 
-    const visibleEntryKeys = new Set(
-      entries.map(
-        (entry) =>
-          `${entry.languageCode}::${entry.sourceWord.toLowerCase()}::${entry.learnedWord.toLowerCase()}`
-      )
+    const normalizedSearchQuery = deferredSearch.trim().toLowerCase();
+    const visibleLearnedNodes = semanticMap.nodes.filter(
+      (node): node is Extract<SemanticGraphNode, { kind: "learned-word" }> =>
+        node.kind === "learned-word" &&
+        matchesGraphLearnedNodeFilters(node, filters, normalizedSearchQuery)
     );
-
-    const visibleNodes = semanticMap.nodes.filter((node) => {
-      if (node.kind === "anchor") {
-        return true;
-      }
-
-      return visibleEntryKeys.has(
-        `${node.languageCode}::${node.sourceWord.toLowerCase()}::${node.learnedWord.toLowerCase()}`
-      );
-    });
+    const visibleAnchorIds = new Set(
+      visibleLearnedNodes.map((node) => node.anchorId).filter(Boolean)
+    );
+    const visibleAnchors = semanticMap.nodes.filter(
+      (node): node is Extract<SemanticGraphNode, { kind: "anchor" }> =>
+        node.kind === "anchor" &&
+        (
+          visibleAnchorIds.has(node.id) ||
+          matchesAnchorSearch(node, normalizedSearchQuery)
+        )
+    );
+    const visibleNodes = [...visibleAnchors, ...visibleLearnedNodes];
 
     const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
     const visibleLinks = semanticMap.links.filter(
       (link) => visibleNodeIds.has(link.source) && visibleNodeIds.has(link.target)
     );
 
-    const visibleLearnedNodeCount = visibleNodes.filter((node) => node.kind === "learned-word").length;
-    if (
-      visibleLearnedNodeCount === 0 &&
-      semanticMap.nodes.some((node) => node.kind === "learned-word")
-    ) {
-      return semanticMap;
-    }
-
     return {
       ...semanticMap,
       nodes: visibleNodes,
       links: visibleLinks,
     };
-  }, [entries, semanticMap]);
+  }, [deferredSearch, filters, semanticMap]);
 
   useEffect(() => {
     if (!visibleSemanticMap || !selectedSemanticNode) {

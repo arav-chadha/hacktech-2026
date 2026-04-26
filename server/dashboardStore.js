@@ -4,6 +4,8 @@ import { ensureMongoIndexes, ensureWordEmbeddingIndexes, getCollectionNames, get
 const DASHBOARD_LANGUAGES = [
   { code: "es", label: "Spanish", locale: "es-ES", storageValue: "spanish" },
   { code: "fr", label: "French", locale: "fr-FR", storageValue: "french" },
+  { code: "ru", label: "Russian", locale: "ru-RU", storageValue: "russian" },
+  { code: "zh", label: "Mandarin", locale: "zh-CN", storageValue: "mandarin" },
 ];
 
 const DASHBOARD_LANGUAGE_BY_CODE = new Map(
@@ -19,10 +21,22 @@ const DASHBOARD_DEFAULT_SETTINGS = {
   learningLevel: "Intermediate",
 };
 const DASHBOARD_SEMANTIC_PROJECTION_SEED = 42;
-const DASHBOARD_SEMANTIC_ANCHOR_SNAPSHOT_URL = new URL(
-  "../dashboard/src/lib/data/semantic/anchor-meanings.snapshot.json",
-  import.meta.url
-);
+const DASHBOARD_SEMANTIC_ANCHOR_SIMILARITY_FLOOR = 0.3;
+const DASHBOARD_SEMANTIC_ROOT_URL = new URL("../dashboard/src/lib/", import.meta.url);
+const DASHBOARD_SEMANTIC_SNAPSHOT_CANDIDATES = {
+  anchor: [
+    "anchor-meanings.snapshots.json",
+    "anchor-meanings.snapshot.json",
+    "anchor-meaning.snapshots.json",
+    "anchor-meaning.snapshot.json",
+  ],
+  learned: [
+    "learned-meaning.snapshots.json",
+    "learned-meanings.snapshots.json",
+    "learned-words.snapshots.json",
+    "learned-words.snapshot.json",
+  ],
+};
 
 const STATUS_ORDER = {
   New: 1,
@@ -70,52 +84,217 @@ function normalizeProjectionCoordinate(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-let semanticAnchorSnapshotCache = null;
+function normalizeInteger(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
 
-function getSemanticAnchorNodes() {
-  if (semanticAnchorSnapshotCache) {
-    return semanticAnchorSnapshotCache;
+function normalizeProjectionMetadata(value) {
+  if (!value || typeof value !== "object") {
+    return null;
   }
+
+  const algorithm = normalizeString(value.algorithm);
+  const dimensions = normalizeInteger(value.dimensions);
+  if (!algorithm || !dimensions) {
+    return null;
+  }
+
+  return {
+    algorithm,
+    dimensions,
+    randomSeed: normalizeInteger(value.randomSeed),
+  };
+}
+
+function walkDirectoryForBasename(directoryUrl, basename) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(directoryUrl, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name === basename) {
+      return new URL(entry.name, directoryUrl);
+    }
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const nextDirectoryUrl = new URL(`${entry.name}/`, directoryUrl);
+    const match = walkDirectoryForBasename(nextDirectoryUrl, basename);
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+}
+
+const semanticSnapshotFileCache = {
+  anchor: undefined,
+  learned: undefined,
+};
+
+function discoverSemanticSnapshotFile(kind) {
+  const cachedFile = semanticSnapshotFileCache[kind];
+  if (cachedFile) {
+    try {
+      fs.accessSync(cachedFile, fs.constants.F_OK);
+      return cachedFile;
+    } catch {
+      semanticSnapshotFileCache[kind] = undefined;
+    }
+  }
+
+  const candidateBasenames = DASHBOARD_SEMANTIC_SNAPSHOT_CANDIDATES[kind] ?? [];
+  for (const basename of candidateBasenames) {
+    const discoveredFile = walkDirectoryForBasename(DASHBOARD_SEMANTIC_ROOT_URL, basename);
+    if (discoveredFile) {
+      semanticSnapshotFileCache[kind] = discoveredFile;
+      return discoveredFile;
+    }
+  }
+
+  return null;
+}
+
+function normalizeAnchorSnapshotNode(node) {
+  if (
+    !node ||
+    node.kind !== "anchor" ||
+    typeof node.id !== "string" ||
+    typeof node.label !== "string" ||
+    typeof node.definition !== "string" ||
+    !Number.isFinite(node.x) ||
+    !Number.isFinite(node.y)
+  ) {
+    return null;
+  }
+
+  const embedding = normalizeEmbedding(node.embedding);
+  return {
+    id: node.id,
+    kind: "anchor",
+    label: node.label,
+    definition: node.definition,
+    x: normalizeProjectionCoordinate(node.x),
+    y: normalizeProjectionCoordinate(node.y),
+    z: normalizeProjectionCoordinate(node.z),
+    embedding: embedding ?? undefined,
+    tags: Array.isArray(node.tags)
+      ? node.tags.filter((tag) => typeof tag === "string")
+      : undefined,
+    notes: typeof node.notes === "string" ? node.notes : undefined,
+  };
+}
+
+function normalizeLearnedSnapshotNode(node) {
+  if (
+    !node ||
+    node.kind !== "learned-word" ||
+    typeof node.id !== "string" ||
+    typeof node.sourceWord !== "string" ||
+    typeof node.learnedWord !== "string" ||
+    typeof node.languageCode !== "string" ||
+    typeof node.anchorId !== "string" ||
+    !Number.isFinite(node.x) ||
+    !Number.isFinite(node.y)
+  ) {
+    return null;
+  }
+
+  const embedding = normalizeEmbedding(node.embedding);
+  return {
+    id: node.id,
+    kind: "learned-word",
+    label: typeof node.label === "string" && node.label ? node.label : node.learnedWord,
+    sourceWord: node.sourceWord,
+    learnedWord: node.learnedWord,
+    languageCode: node.languageCode,
+    anchorId: node.anchorId,
+    x: normalizeProjectionCoordinate(node.x),
+    y: normalizeProjectionCoordinate(node.y),
+    z: normalizeProjectionCoordinate(node.z),
+    embedding: embedding ?? undefined,
+    definition: typeof node.definition === "string" && node.definition ? node.definition : undefined,
+    status: typeof node.status === "string" ? node.status : undefined,
+    level: typeof node.level === "string" ? node.level : undefined,
+    origin: "snapshot",
+  };
+}
+
+function createEmptySemanticSnapshotData() {
+  return {
+    schemaVersion: null,
+    embeddingModel: null,
+    embeddingDimensions: null,
+    generatedAt: null,
+    projection: null,
+    nodes: [],
+  };
+}
+
+function normalizeSemanticSnapshotData(kind, snapshot) {
+  const normalizedSnapshot = createEmptySemanticSnapshotData();
+  const rawNodes = Array.isArray(snapshot?.nodes) ? snapshot.nodes : [];
+
+  normalizedSnapshot.schemaVersion = normalizeInteger(snapshot?.schemaVersion);
+  normalizedSnapshot.embeddingModel =
+    typeof snapshot?.embeddingModel === "string" && snapshot.embeddingModel
+      ? snapshot.embeddingModel
+      : null;
+  normalizedSnapshot.embeddingDimensions = normalizeInteger(snapshot?.embeddingDimensions);
+  normalizedSnapshot.generatedAt = normalizeDate(snapshot?.generatedAt)?.toISOString() ?? null;
+  normalizedSnapshot.projection = normalizeProjectionMetadata(snapshot?.projection);
+  normalizedSnapshot.nodes = rawNodes
+    .map((node) => (kind === "anchor" ? normalizeAnchorSnapshotNode(node) : normalizeLearnedSnapshotNode(node)))
+    .filter(Boolean);
+
+  return normalizedSnapshot;
+}
+
+const semanticSnapshotDataCache = {
+  anchor: undefined,
+  learned: undefined,
+};
+
+function loadSemanticSnapshotNodes(kind) {
+  const discoveredFile = discoverSemanticSnapshotFile(kind);
+  if (!discoveredFile) {
+    return createEmptySemanticSnapshotData();
+  }
+
+  const discoveredFileHref = discoveredFile.href;
 
   try {
-    const rawSnapshot = fs.readFileSync(DASHBOARD_SEMANTIC_ANCHOR_SNAPSHOT_URL, "utf8");
+    const discoveredFileTimestamp = fs.statSync(discoveredFile).mtimeMs;
+    const cachedSnapshot = semanticSnapshotDataCache[kind];
+    if (
+      cachedSnapshot?.fileHref === discoveredFileHref &&
+      cachedSnapshot?.modifiedTimeMs === discoveredFileTimestamp
+    ) {
+      return cachedSnapshot.snapshot;
+    }
+
+    const rawSnapshot = fs.readFileSync(discoveredFile, "utf8");
     const parsedSnapshot = JSON.parse(rawSnapshot);
-    const rawNodes = Array.isArray(parsedSnapshot?.nodes) ? parsedSnapshot.nodes : [];
-
-    semanticAnchorSnapshotCache = rawNodes
-      .filter((node) => node && typeof node === "object" && node.kind === "anchor")
-      .map((node) => {
-        const embedding = normalizeEmbedding(node.embedding);
-        if (
-          typeof node.id !== "string" ||
-          typeof node.label !== "string" ||
-          typeof node.definition !== "string" ||
-          !embedding
-        ) {
-          return null;
-        }
-
-        return {
-          id: node.id,
-          kind: "anchor",
-          label: node.label,
-          definition: node.definition,
-          x: normalizeProjectionCoordinate(node.x),
-          y: normalizeProjectionCoordinate(node.y),
-          z: normalizeProjectionCoordinate(node.z),
-          embedding,
-          tags: Array.isArray(node.tags)
-            ? node.tags.filter((tag) => typeof tag === "string")
-            : undefined,
-          notes: typeof node.notes === "string" ? node.notes : undefined,
-        };
-      })
-      .filter(Boolean);
+    const normalizedSnapshot = normalizeSemanticSnapshotData(kind, parsedSnapshot);
+    semanticSnapshotDataCache[kind] = {
+      fileHref: discoveredFileHref,
+      modifiedTimeMs: discoveredFileTimestamp,
+      snapshot: normalizedSnapshot,
+    };
+    return normalizedSnapshot;
   } catch {
-    semanticAnchorSnapshotCache = [];
+    return createEmptySemanticSnapshotData();
   }
-
-  return semanticAnchorSnapshotCache;
 }
 
 function cosineSimilarity(left, right) {
@@ -162,16 +341,30 @@ function projectEmbeddingToUnitSpace(embedding) {
   };
 }
 
-function findNearestAnchor(embedding, anchors) {
+function findNearestAnchorWithScore(embedding, anchors) {
   if (!Array.isArray(anchors) || anchors.length === 0) {
-    return null;
+    return {
+      anchor: null,
+      score: -1,
+    };
   }
 
-  let nearestAnchor = anchors[0] ?? null;
+  const eligibleAnchors = anchors.filter(
+    (anchor) => Array.isArray(anchor.embedding) && anchor.embedding.length === embedding.length
+  );
+
+  if (eligibleAnchors.length === 0) {
+    return {
+      anchor: null,
+      score: -1,
+    };
+  }
+
+  let nearestAnchor = eligibleAnchors[0] ?? null;
   let bestScore = nearestAnchor ? cosineSimilarity(embedding, nearestAnchor.embedding) : -1;
 
-  for (let index = 1; index < anchors.length; index += 1) {
-    const candidate = anchors[index];
+  for (let index = 1; index < eligibleAnchors.length; index += 1) {
+    const candidate = eligibleAnchors[index];
     const score = cosineSimilarity(embedding, candidate.embedding);
     if (score > bestScore) {
       nearestAnchor = candidate;
@@ -179,13 +372,79 @@ function findNearestAnchor(embedding, anchors) {
     }
   }
 
-  return nearestAnchor;
+  return {
+    anchor: nearestAnchor,
+    score: bestScore,
+  };
 }
 
-function buildSemanticNeighborLinks(nodes) {
+function inverseDistanceSimilarity(left, right) {
+  const dx = left.x - right.x;
+  const dy = left.y - right.y;
+  const dz = left.z - right.z;
+  return 1 / (1 + Math.sqrt(dx * dx + dy * dy + dz * dz));
+}
+
+function measureSemanticSimilarity(left, right) {
+  if (
+    Array.isArray(left.embedding) &&
+    Array.isArray(right.embedding) &&
+    left.embedding.length === right.embedding.length &&
+    left.embedding.length > 0
+  ) {
+    return cosineSimilarity(left.embedding, right.embedding);
+  }
+
+  return inverseDistanceSimilarity(left, right);
+}
+
+function buildSemanticLearnedNodeKey(node) {
+  return [
+    normalizeString(node.languageCode).toLowerCase(),
+    normalizeString(node.sourceWord).toLowerCase(),
+    normalizeString(node.learnedWord).toLowerCase(),
+  ].join("::");
+}
+
+function mergeSemanticLearnedNodes(snapshotLearnedNodes, databaseLearnedNodes) {
+  const mergedNodes = [];
+  const seenKeys = new Set();
+
+  function pushNode(node) {
+    const nodeKey = buildSemanticLearnedNodeKey(node);
+    if (!nodeKey || seenKeys.has(nodeKey)) {
+      return;
+    }
+
+    seenKeys.add(nodeKey);
+    mergedNodes.push(node);
+  }
+
+  snapshotLearnedNodes.forEach(pushNode);
+  databaseLearnedNodes.forEach(pushNode);
+
+  return mergedNodes;
+}
+
+function pickLatestGeneratedAt(...values) {
+  const timestamps = values
+    .flat()
+    .map((value) => normalizeDate(value))
+    .filter(Boolean)
+    .map((date) => date.getTime());
+
+  if (timestamps.length === 0) {
+    return null;
+  }
+
+  return new Date(Math.max(...timestamps)).toISOString();
+}
+
+function buildSemanticNeighborLinks(learnedNodes, anchors) {
   const links = [];
   const linkKeys = new Set();
-  const neighborCount = Math.min(4, Math.max(1, nodes.length - 1));
+  const anchorIds = new Set(anchors.map((anchor) => anchor.id));
+  const neighborCount = Math.min(4, Math.max(1, learnedNodes.length - 1));
 
   function pushLink(source, target) {
     if (!source || !target || source === target) {
@@ -202,14 +461,16 @@ function buildSemanticNeighborLinks(nodes) {
     links.push({ source, target });
   }
 
-  nodes.forEach((node) => {
-    pushLink(node.anchorId, node.id);
+  learnedNodes.forEach((node) => {
+    if (anchorIds.has(node.anchorId)) {
+      pushLink(node.anchorId, node.id);
+    }
 
-    const nearestNeighbors = nodes
+    const nearestNeighbors = learnedNodes
       .filter((candidate) => candidate.id !== node.id)
       .map((candidate) => ({
         id: candidate.id,
-        score: cosineSimilarity(node.embedding ?? [], candidate.embedding ?? []),
+        score: measureSemanticSimilarity(node, candidate),
       }))
       .sort((left, right) => right.score - left.score)
       .slice(0, neighborCount);
@@ -753,103 +1014,137 @@ export async function getDashboardSemanticMap({ userEmail, settings }) {
   const normalizedEmail = normalizeEmail(userEmail);
   const sanitizedSettings = sanitizeSettings(settings);
   const selectedLanguage = DASHBOARD_LANGUAGE_BY_CODE.get(sanitizedSettings.studyLanguageCode);
+  const anchorSnapshot = loadSemanticSnapshotNodes("anchor");
+  const learnedSnapshot = loadSemanticSnapshotNodes("learned");
+  const snapshotAnchors = anchorSnapshot.nodes;
+  const snapshotLearnedNodes = learnedSnapshot.nodes;
+  const databaseLearnedNodes = [];
+  const databaseGeneratedAtValues = [];
 
-  if (!normalizedEmail || !selectedLanguage || !hasMongoConfig()) {
-    return null;
-  }
+  if (normalizedEmail && selectedLanguage && hasMongoConfig()) {
+    await ensureWordEmbeddingIndexes();
+    const db = await getMongoDatabase();
 
-  await ensureWordEmbeddingIndexes();
-  const db = await getMongoDatabase();
-  if (!db) {
-    return null;
-  }
+    if (db) {
+      const { wordEmbeddings } = getCollectionNames();
+      const embeddingDocuments = await db.collection(wordEmbeddings)
+        .find(
+          {
+            userEmailLower: normalizedEmail,
+            targetLanguage: selectedLanguage.storageValue,
+          },
+          {
+            projection: {
+              _id: 0,
+              word: 1,
+              sourceWord: 1,
+              embedding: 1,
+              updatedAt: 1,
+              createdAt: 1,
+            },
+          }
+        )
+        .toArray();
 
-  const { wordEmbeddings } = getCollectionNames();
-  const embeddingDocuments = await db.collection(wordEmbeddings)
-    .find(
-      {
-        userEmailLower: normalizedEmail,
-        targetLanguage: selectedLanguage.storageValue,
-      },
-      {
-        projection: {
-          _id: 0,
-          word: 1,
-          sourceWord: 1,
-          embedding: 1,
-          updatedAt: 1,
-          createdAt: 1,
-        },
-      }
-    )
-    .toArray();
+      for (const [index, document] of embeddingDocuments.entries()) {
+        const learnedWord = normalizeString(document?.word);
+        const sourceWord = normalizeString(document?.sourceWord) || learnedWord;
+        const embedding = normalizeEmbedding(document?.embedding);
 
-  const anchors = getSemanticAnchorNodes();
-  const learnedNodes = embeddingDocuments
-    .map((document, index) => {
-      const learnedWord = normalizeString(document?.word);
-      const sourceWord = normalizeString(document?.sourceWord) || learnedWord;
-      const embedding = normalizeEmbedding(document?.embedding);
+        if (!learnedWord || !embedding) {
+          continue;
+        }
 
-      if (!learnedWord || !embedding) {
-        return null;
-      }
-
-      const nearestAnchor = findNearestAnchor(embedding, anchors);
-      const projectedPoint = projectEmbeddingToUnitSpace(embedding);
-      const anchorX = nearestAnchor?.x ?? 0;
-      const anchorY = nearestAnchor?.y ?? 0;
-      const anchorZ = nearestAnchor?.z ?? 0;
-
-      return {
-        id: `${selectedLanguage.code}-${index + 1}-${learnedWord.toLowerCase().replace(/[^a-z0-9]+/gi, "-")}`,
-        kind: "learned-word",
-        label: learnedWord,
-        sourceWord,
-        learnedWord,
-        languageCode: selectedLanguage.code,
-        anchorId: nearestAnchor?.id ?? `language-${selectedLanguage.code}`,
-        x: anchorX + projectedPoint.x * 2.8,
-        y: anchorY + projectedPoint.y * 2.8,
-        z: anchorZ + projectedPoint.z * 2.8,
-        embedding,
-        definition: nearestAnchor?.definition ?? `Embedded ${selectedLanguage.label} vocabulary.`,
-        level: sanitizedSettings.learningLevel,
-        status: "Practicing",
-        generatedAt:
+        const { anchor: nearestAnchor, score: nearestAnchorScore } = findNearestAnchorWithScore(
+          embedding,
+          snapshotAnchors
+        );
+        const projectedPoint = projectEmbeddingToUnitSpace(embedding);
+        const anchorX = nearestAnchor?.x ?? 0;
+        const anchorY = nearestAnchor?.y ?? 0;
+        const anchorZ = nearestAnchor?.z ?? 0;
+        const isNearEnoughToAnchor = nearestAnchorScore >= DASHBOARD_SEMANTIC_ANCHOR_SIMILARITY_FLOOR;
+        const generatedAt =
           normalizeDate(document?.updatedAt)?.toISOString() ??
           normalizeDate(document?.createdAt)?.toISOString() ??
-          null,
-      };
-    })
-    .filter(Boolean);
+          null;
 
-  if (learnedNodes.length === 0) {
+        if (generatedAt) {
+          databaseGeneratedAtValues.push(generatedAt);
+        }
+
+        databaseLearnedNodes.push({
+          id: `${selectedLanguage.code}-${index + 1}-${learnedWord.toLowerCase().replace(/[^a-z0-9]+/gi, "-")}`,
+          kind: "learned-word",
+          label: learnedWord,
+          sourceWord,
+          learnedWord,
+          languageCode: selectedLanguage.code,
+          anchorId: isNearEnoughToAnchor ? nearestAnchor?.id ?? "" : "",
+          x: anchorX + projectedPoint.x * 2.8,
+          y: anchorY + projectedPoint.y * 2.8,
+          z: anchorZ + projectedPoint.z * 2.8,
+          embedding,
+          definition: nearestAnchor?.definition ?? `Embedded ${selectedLanguage.label} vocabulary.`,
+          level: sanitizedSettings.learningLevel,
+          status: "Practicing",
+          origin: "database",
+        });
+      }
+    }
+  }
+
+  const learnedNodes = mergeSemanticLearnedNodes(snapshotLearnedNodes, databaseLearnedNodes);
+  const usedAnchorIds = new Set(
+    learnedNodes
+      .map((node) => normalizeString(node.anchorId))
+      .filter(Boolean)
+  );
+  const activeAnchors = snapshotAnchors.filter((anchor) => usedAnchorIds.has(anchor.id));
+
+  if (activeAnchors.length === 0 && learnedNodes.length === 0) {
     return null;
   }
 
-  const usedAnchorIds = new Set(learnedNodes.map((node) => node.anchorId));
-  const activeAnchors = anchors.filter((anchor) => usedAnchorIds.has(anchor.id));
-  const links = buildSemanticNeighborLinks(learnedNodes);
-  const generatedAt = learnedNodes
-    .map((node) => node.generatedAt)
-    .filter(Boolean)
-    .sort()
-    .at(-1) ?? new Date().toISOString();
+  const links = buildSemanticNeighborLinks(learnedNodes, activeAnchors);
+  const generatedAt =
+    pickLatestGeneratedAt(
+      learnedSnapshot.generatedAt,
+      anchorSnapshot.generatedAt,
+      databaseGeneratedAtValues
+    ) ?? new Date().toISOString();
+  const hasDatabaseLearnedNodes = databaseLearnedNodes.length > 0;
+  const embeddingDimensions =
+    learnedSnapshot.embeddingDimensions ??
+    anchorSnapshot.embeddingDimensions ??
+    learnedNodes.find((node) => Array.isArray(node.embedding))?.embedding?.length ??
+    activeAnchors.find((node) => Array.isArray(node.embedding))?.embedding?.length ??
+    null;
 
   return {
-    schemaVersion: 1,
-    embeddingModel: "text-embedding-3-small",
-    embeddingDimensions: learnedNodes[0]?.embedding?.length ?? null,
+    schemaVersion:
+      learnedSnapshot.schemaVersion ??
+      anchorSnapshot.schemaVersion ??
+      1,
+    embeddingModel:
+      learnedSnapshot.embeddingModel ??
+      anchorSnapshot.embeddingModel ??
+      (hasDatabaseLearnedNodes ? "text-embedding-3-small" : null),
+    embeddingDimensions,
     generatedAt,
-    projection: {
-      algorithm: "anchor-relative-random-projection",
-      dimensions: 3,
-      randomSeed: DASHBOARD_SEMANTIC_PROJECTION_SEED,
-    },
+    projection:
+      learnedSnapshot.projection ??
+      anchorSnapshot.projection ??
+      (hasDatabaseLearnedNodes
+        ? {
+            algorithm: "anchor-relative-random-projection",
+            dimensions: 3,
+            randomSeed: DASHBOARD_SEMANTIC_PROJECTION_SEED,
+          }
+        : null),
     nodes: [
       ...activeAnchors,
-      ...learnedNodes.map(({ generatedAt: _generatedAt, ...node }) => node),
+      ...learnedNodes,
     ],
     links,
   };

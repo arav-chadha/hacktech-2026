@@ -12,6 +12,7 @@ export type VocabularySortBy =
   | "status";
 
 export type SemanticNodeKind = "anchor" | "learned-word";
+export type SemanticNodeOrigin = "snapshot" | "database";
 
 export interface StudyLanguage {
   code: string;
@@ -90,6 +91,7 @@ export interface SemanticAnchorNode {
 export interface SemanticLearnedWordNode {
   id: string;
   kind: "learned-word";
+  origin: SemanticNodeOrigin;
   label: string;
   sourceWord: string;
   learnedWord: string;
