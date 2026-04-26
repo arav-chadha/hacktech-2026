@@ -1,5 +1,6 @@
 const BACKEND_TRANSLATE_ENDPOINT = "http://127.0.0.1:8787/translate";
 const BACKEND_LOOKUP_WORD_ENDPOINT = "http://127.0.0.1:8787/lookup-word";
+const BACKEND_WORD_FEEDBACK_ENDPOINT = "http://127.0.0.1:8787/word-feedback";
 
 async function readNdjsonStream(response, onEvent) {
   const reader = response.body?.getReader();
@@ -118,6 +119,25 @@ async function lookupWord({ word, targetLanguage }) {
   return responseData.lookup;
 }
 
+async function sendWordFeedback({ userEmail, targetLanguage, sourceTerm }) {
+  const response = await fetch(BACKEND_WORD_FEEDBACK_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      userEmail,
+      targetLanguage,
+      sourceTerm,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Backend word feedback failed (${response.status}): ${errorText}`);
+  }
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "translation-stream") {
     return;
@@ -151,18 +171,29 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "LOOKUP_WORD") {
-    return undefined;
+  if (message?.type === "LOOKUP_WORD") {
+    lookupWord(message.payload)
+      .then((lookup) => sendResponse({ lookup }))
+      .catch((error) => {
+        console.error("Word lookup failed:", error);
+        sendResponse({ error: error.message });
+      });
+
+    return true;
   }
 
-  lookupWord(message.payload)
-    .then((lookup) => sendResponse({ lookup }))
-    .catch((error) => {
-      console.error("Word lookup failed:", error);
-      sendResponse({ error: error.message });
-    });
+  if (message?.type === "WORD_FEEDBACK") {
+    sendWordFeedback(message.payload)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => {
+        console.error("Word feedback failed:", error);
+        sendResponse({ error: error.message });
+      });
 
-  return true;
+    return true;
+  }
+
+  return undefined;
 });
 
 chrome.runtime.onInstalled.addListener((details) => {

@@ -11,8 +11,6 @@ const ALIGNMENT_TOKEN_ATTR = "data-language-extension-alignment-token";
 const LOOKUP_CARD_ID = "language-extension-lookup-card";
 const STYLE_ID = "language-extension-alignment-style";
 const LOOKUP_HOVER_DELAY_MS = 500;
-const WORD_FEEDBACK_ENDPOINT = "http://127.0.0.1:8787/word-feedback";
-
 const processedNodes = new WeakSet();
 const PROCESSED_ATTR = "data-language-extension-processed";
 const WORD_PATTERN = /\b[\p{L}\p{N}'’-]+\b/gu;
@@ -644,7 +642,7 @@ function installAlignmentInteractions() {
         hideLookupCard();
     });
 
-    document.addEventListener("click", (event) => {
+    document.addEventListener("mouseover", (event) => {
         const target = event.target;
         if (!(target instanceof Element)) {
             return;
@@ -677,29 +675,31 @@ async function sendWordFeedback({
         return;
     }
 
-    try {
-        const response = await fetch(WORD_FEEDBACK_ENDPOINT, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
+    return new Promise((resolve) => {
+        chrome.runtime.sendMessage(
+            {
+                type: "WORD_FEEDBACK",
+                payload: {
+                    userEmail,
+                    targetLanguage,
+                    sourceTerm,
+                },
             },
-            body: JSON.stringify({
-                userEmail,
-                targetLanguage,
-                sourceTerm,
-            }),
-        });
+            (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error("Failed to record word feedback:", chrome.runtime.lastError);
+                    resolve();
+                    return;
+                }
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error("Word feedback request failed:", {
-                status: response.status,
-                errorText,
-            });
-        }
-    } catch (error) {
-        console.error("Failed to record word feedback:", error);
-    }
+                if (response?.error) {
+                    console.error("Word feedback request failed:", response.error);
+                }
+
+                resolve();
+            }
+        );
+    });
 }
 
 function getParagraphSelection(node) {
