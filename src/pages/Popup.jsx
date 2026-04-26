@@ -16,6 +16,41 @@ function buildSettingsFromNormalized(normalizedSettings) {
   };
 }
 
+const EXP_LEVELS = [
+  { level: "beginner", minExp: 0, nextExp: 100 },
+  { level: "elementary", minExp: 100, nextExp: 500 },
+  { level: "intermediate", minExp: 500, nextExp: 2000 },
+  { level: "advanced", minExp: 2000, nextExp: 10000 },
+  { level: "fluent", minExp: 10000, nextExp: null },
+];
+
+function getExpProgress(exp, level) {
+  const normalizedExp = Math.max(0, Number(exp) || 0);
+  const matchedLevel =
+    EXP_LEVELS.find((entry) => entry.level === level) ?? EXP_LEVELS[0];
+
+  if (matchedLevel.nextExp === null) {
+    return {
+      progressPercent: 100,
+      progressLabel: `${normalizedExp} EXP`,
+      nextLevelLabel: "Max level reached",
+    };
+  }
+
+  const span = Math.max(1, matchedLevel.nextExp - matchedLevel.minExp);
+  const progressPercent = Math.min(
+    100,
+    Math.max(0, ((normalizedExp - matchedLevel.minExp) / span) * 100)
+  );
+  const remainingExp = Math.max(0, matchedLevel.nextExp - normalizedExp);
+
+  return {
+    progressPercent,
+    progressLabel: `${normalizedExp} EXP`,
+    nextLevelLabel: `${remainingExp} EXP to ${EXP_LEVELS[EXP_LEVELS.findIndex((entry) => entry.level === level) + 1]?.level ?? "next level"}`,
+  };
+}
+
 export default function Popup() {
   const [settings, setSettings] = useState(buildSettingsFromNormalized(DEFAULT_SETTINGS));
   const [status, setStatus] = useState("Loading settings...");
@@ -24,6 +59,10 @@ export default function Popup() {
   const [userExp, setUserExp] = useState(0);
   const {email, loading} = useAuth();
   const usesFullTranslation = isFullTranslationLevel(
+    settings[TRANSLATION_LEVEL_STORAGE_KEY]
+  );
+  const expProgress = getExpProgress(
+    userExp,
     settings[TRANSLATION_LEVEL_STORAGE_KEY]
   );
 
@@ -174,18 +213,30 @@ export default function Popup() {
           <option value="advanced">Advanced</option>
           <option value="fluent">Fluent</option>
         </select>
-        <small>
-          {isLoadingProfile
-            ? "Loading level from MongoDB..."
-            : `Current EXP: ${userExp}.`}
-        </small>
+        <div className="popup__exp-card" aria-live="polite">
+          <div className="popup__exp-meta">
+            <strong>{isLoadingProfile ? "Loading EXP..." : expProgress.progressLabel}</strong>
+            <span>{isLoadingProfile ? "Syncing level from MongoDB..." : expProgress.nextLevelLabel}</span>
+          </div>
+          <div
+            className="popup__exp-bar"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(expProgress.progressPercent)}
+            aria-label="Experience progress to next level"
+          >
+            <div
+              className="popup__exp-fill"
+              style={{ width: `${isLoadingProfile ? 0 : expProgress.progressPercent}%` }}
+            />
+          </div>
+        </div>
       </label>
 
       <button className="popup__button" type="submit" disabled={isSaving}>
         {isSaving ? "Saving..." : "Save And Reload"}
       </button>
-
-      <p className="popup__status">{status}</p>
     </form>
   );
 }
