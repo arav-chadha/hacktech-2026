@@ -1162,8 +1162,10 @@ function observeDOM(processingRoot, settings) {
     });
 }
 
-if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-} else {
-    init();
+if (location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", init);
+    } else {
+        init();
+    }
 }

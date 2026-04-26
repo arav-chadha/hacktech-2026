@@ -12,8 +12,8 @@
     "128": "icon/128.png"
   },
   "oauth2": {
-        "client_id": "1005130732109-ii39qvpmqhhkqmaf80fca3plm3hgcgbg.apps.googleusercontent.com",
-        "scopes": ["openid", "email", "profile"]
+    "client_id": "1005130732109-ii39qvpmqhhkqmaf80fca3plm3hgcgbg.apps.googleusercontent.com",
+    "scopes": ["openid", "email", "profile"]
   },
   "key": "bfcebmkbcpflijkodgabdijoomonmkdo",
   "permissions": [
@@ -33,16 +33,18 @@
     }
   },
   "host_permissions": [
-    "<all_urls>",
-    "http://127.0.0.1:8787/*"
+    "http://*/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "src/background.js"
   },
-
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
       "js": ["src/content/contentScript.js"],
       "run_at": "document_idle"
     }
