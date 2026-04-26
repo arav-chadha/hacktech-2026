@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { ensureMongoIndexes, ensureWordEmbeddingIndexes, getCollectionNames, getMongoDatabase, hasMongoConfig } from "./mongo.js";
+import { getFirecrawlApiKey } from "./dashboardConfig.js";
 
 const DASHBOARD_LANGUAGES = [
   { code: "es", label: "Spanish", locale: "es-ES", storageValue: "spanish" },
@@ -37,6 +38,58 @@ const DASHBOARD_SEMANTIC_SNAPSHOT_CANDIDATES = {
     "learned-words.snapshot.json",
   ],
 };
+const DASHBOARD_DISCOVER_ARTICLE_LIMIT = 3;
+const DASHBOARD_DISCOVER_SEARCH_LIMIT = 6;
+const DASHBOARD_DISCOVER_FALLBACK_QUERY = "short article";
+const DASHBOARD_DISCOVER_BLOCKED_HOST_PATTERNS = [
+  "dictionary",
+  "thesaurus",
+  "wiktionary",
+  "wikipedia",
+  "britannica",
+  "merriam-webster",
+  "cambridge",
+  "vocabulary.com",
+];
+const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
+const DISCOVER_ENGLISH_WORD_PATTERN = /[A-Za-z]+(?:'[A-Za-z]+)?/g;
+const DASHBOARD_DISCOVER_WORD_STOPWORDS = new Set([
+  "about",
+  "after",
+  "among",
+  "because",
+  "being",
+  "could",
+  "every",
+  "first",
+  "from",
+  "have",
+  "into",
+  "many",
+  "more",
+  "other",
+  "people",
+  "short",
+  "some",
+  "such",
+  "than",
+  "that",
+  "their",
+  "there",
+  "these",
+  "they",
+  "this",
+  "those",
+  "through",
+  "under",
+  "very",
+  "what",
+  "when",
+  "where",
+  "which",
+  "while",
+  "would",
+]);
 
 const STATUS_ORDER = {
   New: 1,
@@ -61,6 +114,10 @@ function normalizeString(value) {
 
 function normalizeSearchQuery(value) {
   return normalizeString(value).toLowerCase();
+}
+
+function logDashboardDiscoverEvent(event, details = {}) {
+  console.log(`[dashboard-discover] ${event}`, details);
 }
 
 function normalizeDate(input) {
@@ -438,6 +495,377 @@ function pickLatestGeneratedAt(...values) {
   }
 
   return new Date(Math.max(...timestamps)).toISOString();
+}
+
+function shuffleItems(items) {
+  const copy = [...items];
+
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
+  }
+
+  return copy;
+}
+
+function normalizeUrlHost(value) {
+  try {
+    return new URL(String(value ?? "")).hostname.replace(/^www\./i, "");
+  } catch {
+    return "";
+  }
+}
+
+function stripMarkdownSyntax(value) {
+  return String(value ?? "")
+    .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
+    .replace(/!\[(.*?)\]\((.*?)\)/g, "$1")
+    .replace(/[`*_>#-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function countPhraseOccurrences(text, phrase) {
+  const normalizedText = normalizeString(text);
+  const normalizedPhrase = normalizeString(phrase);
+
+  if (!normalizedText || !normalizedPhrase) {
+    return 0;
+  }
+
+  const matches = normalizedText.match(
+    new RegExp(`\\b${escapeRegExp(normalizedPhrase)}\\b`, "gi")
+  );
+
+  return matches?.length ?? 0;
+}
+
+function extractFirecrawlMarkdown(result) {
+  if (typeof result?.markdown === "string") {
+    return result.markdown;
+  }
+
+  if (typeof result?.content === "string") {
+    return result.content;
+  }
+
+  if (typeof result?.rawMarkdown === "string") {
+    return result.rawMarkdown;
+  }
+
+  return "";
+}
+
+function buildDiscoverPreviewText(result, focusWord) {
+  const description = normalizeString(result?.description);
+  const markdown = stripMarkdownSyntax(extractFirecrawlMarkdown(result));
+
+  if (markdown) {
+    const sentences = markdown.split(/(?<=[.!?])\s+/).map((sentence) => sentence.trim());
+    const matchingSentence = sentences.find(
+      (sentence) =>
+        sentence.length >= 80 &&
+        sentence.toLowerCase().includes(normalizeString(focusWord).toLowerCase())
+    );
+
+    if (matchingSentence) {
+      return matchingSentence.slice(0, 280);
+    }
+
+    if (markdown.length > 0) {
+      return markdown.slice(0, 280);
+    }
+  }
+
+  if (description) {
+    return description.slice(0, 220);
+  }
+
+  return "A short reading recommendation tied to this focus meaning.";
+}
+
+function pickDiscoverWordFromText(value, { allowStopwords = false } = {}) {
+  const matches = normalizeString(value).match(DISCOVER_ENGLISH_WORD_PATTERN) ?? [];
+  const normalizedMatches = matches.map((word) => word.toLowerCase());
+  const preferredWord = normalizedMatches.find(
+    (word) => word.length >= 3 && (allowStopwords || !DASHBOARD_DISCOVER_WORD_STOPWORDS.has(word))
+  );
+
+  if (preferredWord) {
+    return preferredWord;
+  }
+
+  return (
+    normalizedMatches.find((word) => word.length >= 3) ??
+    normalizedMatches.find((word) => word.length >= 2) ??
+    normalizedMatches[0] ??
+    ""
+  );
+}
+
+function extractDiscoverInterestWord(anchor) {
+  const primaryCandidates = [
+    normalizeString(anchor?.label),
+    normalizeString(anchor?.id).replace(/[-_]+/g, " "),
+  ];
+
+  for (const candidate of primaryCandidates) {
+    const pickedWord = pickDiscoverWordFromText(candidate);
+    if (pickedWord) {
+      return pickedWord;
+    }
+  }
+
+  return pickDiscoverWordFromText(anchor?.definition, { allowStopwords: false });
+}
+
+function buildDiscoverFocusCandidates(snapshotAnchors, learnedCountByAnchorId) {
+  return snapshotAnchors
+    .map((anchor) => ({
+      anchor,
+      interestWord: extractDiscoverInterestWord(anchor),
+      learnedCount: Number(learnedCountByAnchorId.get(anchor.id) ?? 0),
+    }))
+    .filter((entry) => entry.interestWord);
+}
+
+function pickDiscoverFocusCandidate(snapshotAnchors, learnedCountByAnchorId) {
+  const focusCandidates = buildDiscoverFocusCandidates(snapshotAnchors, learnedCountByAnchorId);
+  if (focusCandidates.length === 0) {
+    return null;
+  }
+
+  const untouchedCandidates = focusCandidates.filter((entry) => entry.learnedCount === 0);
+  const rankedCandidates = untouchedCandidates.length > 0 ? untouchedCandidates : focusCandidates;
+  const minimumLearnedCount = Math.min(...rankedCandidates.map((entry) => entry.learnedCount));
+  const lowestExposureCandidates = rankedCandidates.filter(
+    (entry) => entry.learnedCount === minimumLearnedCount
+  );
+
+  return shuffleItems(lowestExposureCandidates)[0] ?? null;
+}
+
+function isBlockedDiscoverResult(result) {
+  const host = normalizeUrlHost(result?.url);
+  const loweredTitle = normalizeString(result?.title).toLowerCase();
+
+  return DASHBOARD_DISCOVER_BLOCKED_HOST_PATTERNS.some(
+    (pattern) => host.includes(pattern) || loweredTitle.includes(pattern)
+  );
+}
+
+function scoreDiscoverResult(result, focusWord) {
+  const title = normalizeString(result?.title);
+  const description = normalizeString(result?.description);
+  const markdown = stripMarkdownSyntax(extractFirecrawlMarkdown(result));
+  const titleMatches = countPhraseOccurrences(title, focusWord);
+  const descriptionMatches = countPhraseOccurrences(description, focusWord);
+  const markdownMatches = countPhraseOccurrences(markdown, focusWord);
+
+  return (
+    titleMatches * 5 +
+    descriptionMatches * 3 +
+    markdownMatches +
+    (markdown.length >= 300 && markdown.length <= 5000 ? 3 : 0)
+  );
+}
+
+function buildDiscoverSearchQuery(interestWord, mode = "focused") {
+  if (mode === "fallback") {
+    return DASHBOARD_DISCOVER_FALLBACK_QUERY;
+  }
+
+  const normalizedInterestWord = normalizeString(interestWord);
+  return normalizedInterestWord
+    ? `find short articles with ${normalizedInterestWord} occurring in them`
+    : DASHBOARD_DISCOVER_FALLBACK_QUERY;
+}
+
+async function runFirecrawlSearch(query, interestWord, mode) {
+  const firecrawlApiKey = getFirecrawlApiKey();
+  if (!firecrawlApiKey) {
+    throw new Error("Missing Firecrawl API key. Set FIRECRAWL_API_KEY in server/local-config.js.");
+  }
+  logDashboardDiscoverEvent("firecrawl-search-query", {
+    interestWord,
+    mode,
+    query,
+  });
+
+  const response = await fetch(FIRECRAWL_SEARCH_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${firecrawlApiKey}`,
+      "x-api-key": firecrawlApiKey,
+    },
+    body: JSON.stringify({
+      query,
+      limit: DASHBOARD_DISCOVER_SEARCH_LIMIT,
+      scrapeOptions: {
+        formats: ["markdown"],
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  logDashboardDiscoverEvent("firecrawl-search-response", {
+    interestWord,
+    mode,
+    status: response.status,
+    payload,
+  });
+
+  if (!response.ok || payload?.success === false) {
+    throw new Error(
+      normalizeString(payload?.error) || `Firecrawl search failed (${response.status}).`
+    );
+  }
+
+  const searchResults = Array.isArray(payload?.data?.web)
+    ? payload.data.web
+    : Array.isArray(payload?.data)
+      ? payload.data
+      : [];
+
+  return searchResults;
+}
+
+async function searchDiscoverArticlesForWord(interestWord) {
+  const focusedQuery = buildDiscoverSearchQuery(interestWord, "focused");
+  let searchResults = await runFirecrawlSearch(focusedQuery, interestWord, "focused");
+
+  if (searchResults.length === 0) {
+    const fallbackQuery = buildDiscoverSearchQuery(interestWord, "fallback");
+    searchResults = await runFirecrawlSearch(fallbackQuery, interestWord, "fallback");
+  }
+
+  const normalizedResults = searchResults
+    .filter((result) => normalizeString(result?.url) && normalizeString(result?.title))
+    .map((result) => ({
+      url: normalizeString(result.url),
+      title: normalizeString(result.title),
+      description: normalizeString(result.description),
+      preview: buildDiscoverPreviewText(result, interestWord),
+      sourceHost: normalizeUrlHost(result.url),
+      blocked: isBlockedDiscoverResult(result),
+      score: scoreDiscoverResult(result, interestWord),
+    }));
+
+  const rankedPreferredResults = normalizedResults
+    .filter((result) => !result.blocked && result.score > 0)
+    .sort((left, right) => right.score - left.score);
+  const rankedFallbackResults = normalizedResults
+    .filter((result) => !result.blocked)
+    .sort((left, right) => right.score - left.score);
+  const rankedAnyResults = normalizedResults.sort((left, right) => right.score - left.score);
+  const chosenResults =
+    rankedPreferredResults.length > 0
+      ? rankedPreferredResults
+      : rankedFallbackResults.length > 0
+        ? rankedFallbackResults
+        : rankedAnyResults;
+
+  return chosenResults
+    .slice(0, DASHBOARD_DISCOVER_ARTICLE_LIMIT)
+    .map(({ blocked: _blocked, score: _score, ...result }) => result);
+}
+
+async function buildDashboardSemanticSources({ userEmail, settings }) {
+  const normalizedEmail = normalizeEmail(userEmail);
+  const sanitizedSettings = sanitizeSettings(settings);
+  const selectedLanguage = DASHBOARD_LANGUAGE_BY_CODE.get(sanitizedSettings.studyLanguageCode);
+  const anchorSnapshot = loadSemanticSnapshotNodes("anchor");
+  const learnedSnapshot = loadSemanticSnapshotNodes("learned");
+  const snapshotAnchors = anchorSnapshot.nodes;
+  const snapshotLearnedNodes = learnedSnapshot.nodes;
+  const databaseLearnedNodes = [];
+  const databaseGeneratedAtValues = [];
+
+  if (normalizedEmail && selectedLanguage && hasMongoConfig()) {
+    await ensureWordEmbeddingIndexes();
+    const db = await getMongoDatabase();
+
+    if (db) {
+      const { wordEmbeddings } = getCollectionNames();
+      const embeddingDocuments = await db.collection(wordEmbeddings)
+        .find(
+          {
+            userEmailLower: normalizedEmail,
+            targetLanguage: selectedLanguage.storageValue,
+          },
+          {
+            projection: {
+              _id: 0,
+              word: 1,
+              sourceWord: 1,
+              embedding: 1,
+              updatedAt: 1,
+              createdAt: 1,
+            },
+          }
+        )
+        .toArray();
+
+      for (const [index, document] of embeddingDocuments.entries()) {
+        const learnedWord = normalizeString(document?.word);
+        const sourceWord = normalizeString(document?.sourceWord) || learnedWord;
+        const embedding = normalizeEmbedding(document?.embedding);
+
+        if (!learnedWord || !embedding) {
+          continue;
+        }
+
+        const { anchor: nearestAnchor, score: nearestAnchorScore } = findNearestAnchorWithScore(
+          embedding,
+          snapshotAnchors
+        );
+        const projectedPoint = projectEmbeddingToUnitSpace(embedding);
+        const anchorX = nearestAnchor?.x ?? 0;
+        const anchorY = nearestAnchor?.y ?? 0;
+        const anchorZ = nearestAnchor?.z ?? 0;
+        const isNearEnoughToAnchor = nearestAnchorScore >= DASHBOARD_SEMANTIC_ANCHOR_SIMILARITY_FLOOR;
+        const generatedAt =
+          normalizeDate(document?.updatedAt)?.toISOString() ??
+          normalizeDate(document?.createdAt)?.toISOString() ??
+          null;
+
+        if (generatedAt) {
+          databaseGeneratedAtValues.push(generatedAt);
+        }
+
+        databaseLearnedNodes.push({
+          id: `${selectedLanguage.code}-${index + 1}-${learnedWord.toLowerCase().replace(/[^a-z0-9]+/gi, "-")}`,
+          kind: "learned-word",
+          label: learnedWord,
+          sourceWord,
+          learnedWord,
+          languageCode: selectedLanguage.code,
+          anchorId: isNearEnoughToAnchor ? nearestAnchor?.id ?? "" : "",
+          x: anchorX + projectedPoint.x * 2.8,
+          y: anchorY + projectedPoint.y * 2.8,
+          z: anchorZ + projectedPoint.z * 2.8,
+          embedding,
+          definition: nearestAnchor?.definition ?? `Embedded ${selectedLanguage.label} vocabulary.`,
+          level: sanitizedSettings.learningLevel,
+          status: "Practicing",
+          origin: "database",
+        });
+      }
+    }
+  }
+
+  return {
+    normalizedEmail,
+    sanitizedSettings,
+    selectedLanguage,
+    anchorSnapshot,
+    learnedSnapshot,
+    snapshotAnchors,
+    snapshotLearnedNodes,
+    databaseLearnedNodes,
+    databaseGeneratedAtValues,
+  };
 }
 
 function buildSemanticNeighborLinks(learnedNodes, anchors) {
@@ -1011,88 +1439,17 @@ export async function getDashboardVocabularyEntries({
 }
 
 export async function getDashboardSemanticMap({ userEmail, settings }) {
-  const normalizedEmail = normalizeEmail(userEmail);
-  const sanitizedSettings = sanitizeSettings(settings);
-  const selectedLanguage = DASHBOARD_LANGUAGE_BY_CODE.get(sanitizedSettings.studyLanguageCode);
-  const anchorSnapshot = loadSemanticSnapshotNodes("anchor");
-  const learnedSnapshot = loadSemanticSnapshotNodes("learned");
-  const snapshotAnchors = anchorSnapshot.nodes;
-  const snapshotLearnedNodes = learnedSnapshot.nodes;
-  const databaseLearnedNodes = [];
-  const databaseGeneratedAtValues = [];
-
-  if (normalizedEmail && selectedLanguage && hasMongoConfig()) {
-    await ensureWordEmbeddingIndexes();
-    const db = await getMongoDatabase();
-
-    if (db) {
-      const { wordEmbeddings } = getCollectionNames();
-      const embeddingDocuments = await db.collection(wordEmbeddings)
-        .find(
-          {
-            userEmailLower: normalizedEmail,
-            targetLanguage: selectedLanguage.storageValue,
-          },
-          {
-            projection: {
-              _id: 0,
-              word: 1,
-              sourceWord: 1,
-              embedding: 1,
-              updatedAt: 1,
-              createdAt: 1,
-            },
-          }
-        )
-        .toArray();
-
-      for (const [index, document] of embeddingDocuments.entries()) {
-        const learnedWord = normalizeString(document?.word);
-        const sourceWord = normalizeString(document?.sourceWord) || learnedWord;
-        const embedding = normalizeEmbedding(document?.embedding);
-
-        if (!learnedWord || !embedding) {
-          continue;
-        }
-
-        const { anchor: nearestAnchor, score: nearestAnchorScore } = findNearestAnchorWithScore(
-          embedding,
-          snapshotAnchors
-        );
-        const projectedPoint = projectEmbeddingToUnitSpace(embedding);
-        const anchorX = nearestAnchor?.x ?? 0;
-        const anchorY = nearestAnchor?.y ?? 0;
-        const anchorZ = nearestAnchor?.z ?? 0;
-        const isNearEnoughToAnchor = nearestAnchorScore >= DASHBOARD_SEMANTIC_ANCHOR_SIMILARITY_FLOOR;
-        const generatedAt =
-          normalizeDate(document?.updatedAt)?.toISOString() ??
-          normalizeDate(document?.createdAt)?.toISOString() ??
-          null;
-
-        if (generatedAt) {
-          databaseGeneratedAtValues.push(generatedAt);
-        }
-
-        databaseLearnedNodes.push({
-          id: `${selectedLanguage.code}-${index + 1}-${learnedWord.toLowerCase().replace(/[^a-z0-9]+/gi, "-")}`,
-          kind: "learned-word",
-          label: learnedWord,
-          sourceWord,
-          learnedWord,
-          languageCode: selectedLanguage.code,
-          anchorId: isNearEnoughToAnchor ? nearestAnchor?.id ?? "" : "",
-          x: anchorX + projectedPoint.x * 2.8,
-          y: anchorY + projectedPoint.y * 2.8,
-          z: anchorZ + projectedPoint.z * 2.8,
-          embedding,
-          definition: nearestAnchor?.definition ?? `Embedded ${selectedLanguage.label} vocabulary.`,
-          level: sanitizedSettings.learningLevel,
-          status: "Practicing",
-          origin: "database",
-        });
-      }
-    }
-  }
+  const {
+    anchorSnapshot,
+    learnedSnapshot,
+    snapshotAnchors,
+    snapshotLearnedNodes,
+    databaseLearnedNodes,
+    databaseGeneratedAtValues,
+  } = await buildDashboardSemanticSources({
+    userEmail,
+    settings,
+  });
 
   const learnedNodes = mergeSemanticLearnedNodes(snapshotLearnedNodes, databaseLearnedNodes);
   const usedAnchorIds = new Set(
@@ -1147,5 +1504,77 @@ export async function getDashboardSemanticMap({ userEmail, settings }) {
       ...learnedNodes,
     ],
     links,
+  };
+}
+
+export async function getDashboardDiscoverRecommendation({ userEmail, settings }) {
+  const {
+    sanitizedSettings,
+    selectedLanguage,
+    snapshotAnchors,
+    snapshotLearnedNodes,
+    databaseLearnedNodes,
+  } = await buildDashboardSemanticSources({
+    userEmail,
+    settings,
+  });
+
+  if (!selectedLanguage || snapshotAnchors.length === 0) {
+    return null;
+  }
+
+  const learnedNodes = mergeSemanticLearnedNodes(snapshotLearnedNodes, databaseLearnedNodes).filter(
+    (node) => node.languageCode === selectedLanguage.code
+  );
+  const learnedCountByAnchorId = new Map();
+
+  for (const node of learnedNodes) {
+    const anchorId = normalizeString(node.anchorId);
+    if (!anchorId) {
+      continue;
+    }
+
+    learnedCountByAnchorId.set(anchorId, Number(learnedCountByAnchorId.get(anchorId) ?? 0) + 1);
+  }
+
+  const untouchedAnchors = snapshotAnchors.filter(
+    (anchor) => Number(learnedCountByAnchorId.get(anchor.id) ?? 0) === 0
+  );
+  const fallbackFocusAnchor =
+    untouchedAnchors[0] ??
+    [...snapshotAnchors].sort((left, right) => {
+      const leftCount = Number(learnedCountByAnchorId.get(left.id) ?? 0);
+      const rightCount = Number(learnedCountByAnchorId.get(right.id) ?? 0);
+
+      if (leftCount !== rightCount) {
+        return leftCount - rightCount;
+      }
+
+      return left.label.localeCompare(right.label);
+    })[0] ??
+    null;
+  const focusCandidate = pickDiscoverFocusCandidate(snapshotAnchors, learnedCountByAnchorId);
+  const focusAnchor = focusCandidate?.anchor ?? fallbackFocusAnchor;
+  const interestWord =
+    focusCandidate?.interestWord ??
+    extractDiscoverInterestWord(fallbackFocusAnchor) ??
+    "";
+
+  if (!focusAnchor || !interestWord) {
+    return null;
+  }
+
+  const articles = await searchDiscoverArticlesForWord(interestWord);
+
+  return {
+    focusAnchorId: focusAnchor.id,
+    focusWord: interestWord,
+    focusDefinition: focusAnchor.definition,
+    focusTags: Array.isArray(focusAnchor.tags) ? focusAnchor.tags : [],
+    studyLanguageCode: selectedLanguage.code,
+    studyLanguageLabel: selectedLanguage.label,
+    learningLevel: sanitizedSettings.learningLevel,
+    generatedAt: new Date().toISOString(),
+    articles,
   };
 }

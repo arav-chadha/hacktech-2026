@@ -2,6 +2,7 @@
 
 import { dashboardConfig } from "@/lib/config";
 import type {
+  DiscoverRecommendation,
   DashboardRepository,
   OverviewStats,
   ProgressRange,
@@ -82,6 +83,16 @@ export function createDashboardRepository(): DashboardRepository {
         "/dashboard/semantic-map"
       );
       return response.snapshot;
+    },
+
+    async discoverArticles(): Promise<DiscoverRecommendation | null> {
+      const response = await requestDashboard<{ recommendation: DiscoverRecommendation | null }>(
+        "/dashboard/discover",
+        {
+          method: "POST",
+        }
+      );
+      return response.recommendation;
     },
 
     async getStudySettings() {

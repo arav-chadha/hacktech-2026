@@ -42,6 +42,7 @@ import {
 } from "./dashboardAuth.js";
 import { resolveDashboardOrigin } from "./dashboardConfig.js";
 import {
+  getDashboardDiscoverRecommendation,
   getDashboardLanguages,
   getDashboardOverview,
   getDashboardSemanticMap,
@@ -1139,6 +1140,32 @@ async function handleDashboardRequest({
     sendDashboardJson(response, requestOrigin, 200, {
       snapshot,
     });
+    return true;
+  }
+
+  if (pathname === "/dashboard/discover" && request.method === "POST") {
+    try {
+      const settings = await getDashboardSettings({
+        userEmail: session.email,
+      });
+      const recommendation = await getDashboardDiscoverRecommendation({
+        userEmail: session.email,
+        settings,
+      });
+
+      sendDashboardJson(response, requestOrigin, 200, {
+        recommendation,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to discover reading recommendations.";
+
+      sendDashboardJson(response, requestOrigin, 500, {
+        error: message,
+      });
+    }
     return true;
   }
 

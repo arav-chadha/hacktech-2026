@@ -123,10 +123,31 @@ export interface SemanticGraphSnapshot {
   links: SemanticGraphLink[];
 }
 
+export interface DiscoverArticleRecommendation {
+  url: string;
+  title: string;
+  description: string;
+  preview: string;
+  sourceHost: string;
+}
+
+export interface DiscoverRecommendation {
+  focusAnchorId: string;
+  focusWord: string;
+  focusDefinition: string;
+  focusTags: string[];
+  studyLanguageCode: string;
+  studyLanguageLabel: string;
+  learningLevel: LearningLevel;
+  generatedAt: string;
+  articles: DiscoverArticleRecommendation[];
+}
+
 export interface DashboardRepository {
   getOverviewStats(range: ProgressRange): Promise<OverviewStats>;
   getVocabularyEntries(filters: VocabularyFilters): Promise<VocabularyEntry[]>;
   getVocabularySemanticMap(): Promise<SemanticGraphSnapshot | null>;
+  discoverArticles(): Promise<DiscoverRecommendation | null>;
   getStudySettings(): Promise<StudySettings>;
   updateStudySettings(input: StudySettings): Promise<StudySettings>;
   getAvailableLanguages(): Promise<StudyLanguage[]>;

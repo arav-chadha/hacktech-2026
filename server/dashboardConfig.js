@@ -61,3 +61,11 @@ export function getDashboardSessionSecret() {
     "hacktech-dashboard-session-dev-secret"
   );
 }
+
+export function getFirecrawlApiKey() {
+  return (
+    normalizeString(process.env.FIRECRAWL_API_KEY) ||
+    normalizeString(localConfig.FIRECRAWL_API_KEY) ||
+    ""
+  );
+}
