@@ -1,44 +1,68 @@
+html,
+body {
+    margin: 0;
+    min-width: 360px;
+    background:
+        radial-gradient(circle at top, rgba(255, 255, 255, 0.16), transparent 38%),
+        linear-gradient(180deg, #121827 0%, #0b1020 100%);
+    font-family: "Avenir Next", "SF Pro Display", "Segoe UI", sans-serif;
+}
+
+body {
+    color: white;
+}
+
 .popup {
     height: 100%;
+    min-height: 540px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    padding: 24px 20px;
+    gap: 18px;
+    padding: 24px 20px 20px;
     box-sizing: border-box;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)),
+        transparent;
 }
 
 .popup img {
-    width: 96px;
-    height: 96px;
+    width: 92px;
+    height: 92px;
     align-self: center;
+    filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.22));
 }
 
 .popup__copy {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
+    text-align: center;
+    align-items: center;
 }
 
 .popup h1 {
     margin: 0;
-    font-size: 22px;
+    font-size: 24px;
     color: white;
-    font-weight: 700;
+    font-weight: 650;
+    letter-spacing: -0.03em;
 }
 
 .popup p {
     margin: 0;
-    color: rgba(255, 255, 255, 0.78);
-    line-height: 1.4;
+    color: rgba(255, 255, 255, 0.72);
+    line-height: 1.45;
+    max-width: 290px;
 }
 
 .popup__field {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 9px;
     color: white;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
+    letter-spacing: 0.01em;
 }
 
 .popup__grid {
@@ -50,26 +74,53 @@
 .popup__field input,
 .popup__field select {
     appearance: none;
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.07);
     color: white;
     padding: 12px 14px;
     font: inherit;
+    box-sizing: border-box;
+    transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.popup__field input:hover,
+.popup__field select:hover {
+    border-color: rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.popup__field select {
+    text-align: center;
+    text-align-last: center;
+    background-image:
+        linear-gradient(45deg, transparent 50%, rgba(255, 255, 255, 0.72) 50%),
+        linear-gradient(135deg, rgba(255, 255, 255, 0.72) 50%, transparent 50%);
+    background-position:
+        calc(100% - 18px) calc(50% - 2px),
+        calc(100% - 12px) calc(50% - 2px);
+    background-size: 6px 6px, 6px 6px;
+    background-repeat: no-repeat;
+    padding-right: 28px;
 }
 
 .popup__field input[type="range"] {
     padding: 0;
+    accent-color: #f8785c;
 }
 
 .popup__field input:focus,
 .popup__field select:focus {
-    outline: 2px solid rgba(255, 255, 255, 0.35);
-    outline-offset: 2px;
+    outline: none;
+    border-color: rgba(248, 120, 92, 0.8);
+    background: rgba(255, 255, 255, 0.11);
+    box-shadow: 0 0 0 3px rgba(248, 120, 92, 0.18);
+    transform: translateY(-1px);
 }
 
 .popup__field option {
     color: black;
+    text-align: center;
 }
 
 .popup__label-row {
@@ -83,17 +134,26 @@
     color: rgba(255, 255, 255, 0.62);
     font-size: 12px;
     font-weight: 400;
+    line-height: 1.4;
 }
 
 .popup__button {
     border: 0;
-    border-radius: 12px;
-    background: #f65d4e;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #f8785c 0%, #ea5447 100%);
     color: white;
-    padding: 12px 14px;
+    padding: 13px 14px;
     font: inherit;
     font-weight: 700;
+    letter-spacing: 0.01em;
     cursor: pointer;
+    box-shadow: 0 12px 24px rgba(234, 84, 71, 0.24);
+    transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+}
+
+.popup__button:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 14px 28px rgba(234, 84, 71, 0.3);
 }
 
 .popup__button:disabled {
@@ -105,4 +165,5 @@
     min-height: 20px;
     font-size: 13px;
     color: rgba(255, 255, 255, 0.62);
+    text-align: center;
 }

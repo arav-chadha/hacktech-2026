@@ -9,8 +9,11 @@ import {
 
 const ALIGNMENT_TOKEN_ATTR = "data-language-extension-alignment-token";
 const LOOKUP_CARD_ID = "language-extension-lookup-card";
+const LOOKUP_AUDIO_BUTTON_ID = "language-extension-lookup-audio-button";
 const STYLE_ID = "language-extension-alignment-style";
 const LOOKUP_HOVER_DELAY_MS = 500;
+const LOOKUP_HIDE_DELAY_MS = 180;
+
 const processedNodes = new WeakSet();
 const PROCESSED_ATTR = "data-language-extension-processed";
 const WORD_PATTERN = /\b[\p{L}\p{N}'’-]+\b/gu;
@@ -55,8 +58,13 @@ const EXCLUDED_CONTAINER_SELECTOR = [
 
 let userEmail = null;
 const lookupCache = new Map();
+const speechCache = new Map();
 let activeLookupRequestId = 0;
 let activeLookupHoverTimeout = null;
+let activeLookupHideTimeout = null;
+let activeLookupAnchor = null;
+let activeLookupAudio = null;
+let isLookupAudioLoading = false;
 
 let activeSettings = { ...DEFAULT_SETTINGS };
 
@@ -103,19 +111,6 @@ function getWordMatches(text) {
 
 function createWordPattern() {
     return /[\p{L}\p{N}\p{M}'’-]+/gu;
-}
-
-function getAlignmentTokenText(alignmentText, relativeIndex) {
-    const tokens = getWordMatches(alignmentText).map((match) => match[0]);
-    if (tokens.length === 0) {
-        return alignmentText;
-    }
-
-    if (relativeIndex < tokens.length) {
-        return tokens[relativeIndex];
-    }
-
-    return tokens[tokens.length - 1];
 }
 
 function buildStartTag(element) {
@@ -253,7 +248,7 @@ function ensureAlignmentStyles() {
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
             border: 1px solid rgba(255, 255, 255, 0.08);
             font: 12px/1.35 system-ui, sans-serif;
-            pointer-events: none;
+            pointer-events: auto;
             opacity: 0;
             transform: translateY(6px);
             transition: opacity 140ms ease, transform 140ms ease;
@@ -269,6 +264,12 @@ function ensureAlignmentStyles() {
             flex-direction: column;
             gap: 2px;
             margin-bottom: 6px;
+        }
+
+        #${LOOKUP_CARD_ID} .language-extension-lookup-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 8px;
         }
 
         #${LOOKUP_CARD_ID} .language-extension-lookup-word {
@@ -297,6 +298,23 @@ function ensureAlignmentStyles() {
         #${LOOKUP_CARD_ID} .language-extension-lookup-example {
             color: rgba(246, 247, 251, 0.84);
             font-style: italic;
+        }
+
+        #${LOOKUP_CARD_ID} .language-extension-lookup-audio-button {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+            padding: 5px 10px;
+            font: inherit;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        #${LOOKUP_CARD_ID} .language-extension-lookup-audio-button:disabled {
+            opacity: 0.6;
+            cursor: wait;
         }
     `;
     document.documentElement.appendChild(style);
@@ -327,6 +345,7 @@ function hideLookupCard() {
     }
 
     card.classList.remove("language-extension-lookup-card-visible");
+    activeLookupAnchor = null;
 }
 
 function clearLookupHoverTimeout() {
@@ -334,6 +353,22 @@ function clearLookupHoverTimeout() {
         window.clearTimeout(activeLookupHoverTimeout);
         activeLookupHoverTimeout = null;
     }
+}
+
+function clearLookupHideTimeout() {
+    if (activeLookupHideTimeout) {
+        window.clearTimeout(activeLookupHideTimeout);
+        activeLookupHideTimeout = null;
+    }
+}
+
+function scheduleLookupCardHide() {
+    clearLookupHideTimeout();
+    activeLookupHideTimeout = window.setTimeout(() => {
+        activeLookupHideTimeout = null;
+        clearActiveAlignmentTokens();
+        hideLookupCard();
+    }, LOOKUP_HIDE_DELAY_MS);
 }
 
 function positionLookupCard(card, targetElement) {
@@ -370,8 +405,19 @@ function renderLookupCard(targetElement, lookupState) {
             <span class="language-extension-lookup-label">Example</span>
             <div class="language-extension-lookup-example">${example}</div>
         </div>
+        <div class="language-extension-lookup-actions">
+            <button
+                id="${LOOKUP_AUDIO_BUTTON_ID}"
+                class="language-extension-lookup-audio-button"
+                type="button"
+                ${isLookupAudioLoading ? "disabled" : ""}
+            >
+                ${isLookupAudioLoading ? "Loading..." : "Listen"}
+            </button>
+        </div>
     `;
 
+    activeLookupAnchor = targetElement;
     positionLookupCard(card, targetElement);
     card.classList.add("language-extension-lookup-card-visible");
 }
@@ -405,6 +451,79 @@ async function fetchWordLookup(word, targetLanguage) {
             }
         );
     });
+}
+
+async function fetchWordSpeech(word, targetLanguage) {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+            {
+                type: "SPEAK_WORD",
+                payload: {
+                    word,
+                    targetLanguage,
+                },
+            },
+            (response) => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                    return;
+                }
+
+                if (response?.error) {
+                    reject(new Error(response.error));
+                    return;
+                }
+
+                resolve(response?.speech ?? null);
+            }
+        );
+    });
+}
+
+function getSpeechCacheKey(targetLanguage, word) {
+    return `${targetLanguage}::${normalizeWhitespace(word).toLocaleLowerCase()}`;
+}
+
+async function playLookupAudio(targetElement) {
+    const targetWord = targetElement.dataset.targetText;
+    const targetLanguage = targetElement.dataset.targetLanguage;
+    if (!targetWord || !targetLanguage) {
+        return;
+    }
+
+    const cacheKey = getSpeechCacheKey(targetLanguage, targetWord);
+    const currentLookup = lookupCache.get(getLookupCacheKey(targetLanguage, targetWord)) ?? {
+        word: targetWord,
+        definition: "No dictionary definition found.",
+        example: "No example usage found.",
+    };
+
+    isLookupAudioLoading = true;
+    renderLookupCard(targetElement, currentLookup);
+
+    try {
+        let dataUrl = speechCache.get(cacheKey);
+        if (!dataUrl) {
+            const speech = await fetchWordSpeech(targetWord, targetLanguage);
+            dataUrl = `data:${speech?.mimeType || "audio/mpeg"};base64,${speech?.audioBase64 || ""}`;
+            speechCache.set(cacheKey, dataUrl);
+        }
+
+        if (activeLookupAudio) {
+            activeLookupAudio.pause();
+            activeLookupAudio.currentTime = 0;
+        }
+
+        activeLookupAudio = new Audio(dataUrl);
+        await activeLookupAudio.play();
+    } catch (error) {
+        console.error("Audio playback failed:", error);
+    } finally {
+        isLookupAudioLoading = false;
+        if (activeLookupAnchor === targetElement) {
+            renderLookupCard(targetElement, currentLookup);
+        }
+    }
 }
 
 async function showLookupCardForToken(alignedToken) {
@@ -553,14 +672,11 @@ function applyAlignmentMarkup(paragraph, alignments, targetLanguage) {
 
             const segmentText = text.slice(segment.localStart, segment.localEnd);
             if (segment.alignment) {
-                const targetOffset = Math.max(0, segment.tokenIndex - segment.alignment.targetStart);
-                const sourceWord = getAlignmentTokenText(segment.alignment.sourceText, targetOffset);
-                const targetWord = getAlignmentTokenText(segment.alignment.targetText, targetOffset);
                 const span = document.createElement("span");
                 span.setAttribute(ALIGNMENT_TOKEN_ATTR, segment.alignment.id);
                 span.dataset.alignmentId = segment.alignment.id;
-                span.dataset.sourceText = sourceWord;
-                span.dataset.targetText = targetWord;
+                span.dataset.sourceText = segment.alignment.sourceText;
+                span.dataset.targetText = segmentText;
                 span.dataset.targetLanguage = targetLanguage;
                 span.textContent = segmentText;
                 fragment.append(span);
@@ -588,6 +704,11 @@ function installAlignmentInteractions() {
             return;
         }
 
+        if (target.closest(`#${LOOKUP_CARD_ID}`)) {
+            clearLookupHideTimeout();
+            return;
+        }
+
         const alignedToken = target.closest(`[${ALIGNMENT_TOKEN_ATTR}]`);
         if (!(alignedToken instanceof HTMLElement)) {
             return;
@@ -610,6 +731,7 @@ function installAlignmentInteractions() {
         }
 
         clearLookupHoverTimeout();
+        clearLookupHideTimeout();
         activeLookupHoverTimeout = window.setTimeout(() => {
             activeLookupHoverTimeout = null;
             void showLookupCardForToken(alignedToken);
@@ -631,6 +753,10 @@ function installAlignmentInteractions() {
         if (relatedTarget instanceof Element && alignedToken.contains(relatedTarget)) {
             return;
         }
+        const lookupCard = document.getElementById(LOOKUP_CARD_ID);
+        if (lookupCard instanceof HTMLElement && relatedTarget instanceof Element && lookupCard.contains(relatedTarget)) {
+            return;
+        }
 
         const paragraph = alignedToken.closest("p");
         if (paragraph instanceof HTMLElement) {
@@ -639,7 +765,51 @@ function installAlignmentInteractions() {
             clearActiveAlignmentTokens();
         }
         clearLookupHoverTimeout();
-        hideLookupCard();
+        scheduleLookupCardHide();
+    });
+
+    document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        if (target.id !== LOOKUP_AUDIO_BUTTON_ID) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (activeLookupAnchor instanceof HTMLElement) {
+            void playLookupAudio(activeLookupAnchor);
+        }
+    });
+
+    document.addEventListener("mouseout", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        const lookupCard = target.closest(`#${LOOKUP_CARD_ID}`);
+        if (!(lookupCard instanceof HTMLElement)) {
+            return;
+        }
+
+        const relatedTarget = event.relatedTarget;
+        if (relatedTarget instanceof Element) {
+            if (lookupCard.contains(relatedTarget)) {
+                return;
+            }
+
+            const alignedToken = relatedTarget.closest?.(`[${ALIGNMENT_TOKEN_ATTR}]`);
+            if (alignedToken instanceof HTMLElement) {
+                return;
+            }
+        }
+
+        scheduleLookupCardHide();
     });
 
     document.addEventListener("mouseover", (event) => {

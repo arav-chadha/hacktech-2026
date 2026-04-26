@@ -37,6 +37,12 @@ const TARGET_LANGUAGE_CODE_MAP = {
 const OPENAI_API_KEY =
   process.env.OPENAI_API_KEY?.trim() || localConfig.LOCAL_OPENAI_API_KEY?.trim() || "";
 const openAIClient = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+const ELEVENLABS_API_KEY =
+  process.env.ELEVENLABS_API_KEY?.trim() || localConfig.LOCAL_ELEVENLABS_API_KEY?.trim() || "";
+const ELEVENLABS_VOICE_ID =
+  process.env.ELEVENLABS_VOICE_ID?.trim() || localConfig.LOCAL_ELEVENLABS_VOICE_ID?.trim() || "JBFqnCBsd6RMkjVDRZzb";
+const ELEVENLABS_MODEL_ID =
+  process.env.ELEVENLABS_MODEL_ID?.trim() || localConfig.LOCAL_ELEVENLABS_MODEL_ID?.trim() || "eleven_multilingual_v2";
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -615,6 +621,50 @@ async function fetchWordLookup({ word, targetLanguage }) {
   };
 }
 
+async function synthesizeWordAudio({ word, targetLanguage }) {
+  const normalizedWord = normalizeLookupWord(word);
+  if (!normalizedWord) {
+    throw new Error("word is required.");
+  }
+
+  if (!ELEVENLABS_API_KEY) {
+    throw new Error("Missing ElevenLabs API key. Set ELEVENLABS_API_KEY or LOCAL_ELEVENLABS_API_KEY.");
+  }
+
+  const languageCode = getTargetLanguageCode(targetLanguage);
+  if (!languageCode) {
+    throw new Error(`Unsupported speech language: ${targetLanguage}`);
+  }
+
+  const speechUrl = new URL(`https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`);
+  speechUrl.searchParams.set("output_format", "mp3_44100_128");
+
+  const response = await fetch(speechUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "xi-api-key": ELEVENLABS_API_KEY,
+    },
+    body: JSON.stringify({
+      text: normalizedWord,
+      model_id: ELEVENLABS_MODEL_ID,
+      language_code: languageCode,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`ElevenLabs TTS failed (${response.status}): ${errorText}`);
+  }
+
+  const audioBytes = new Uint8Array(await response.arrayBuffer());
+  return {
+    audioBase64: Buffer.from(audioBytes).toString("base64"),
+    mimeType: response.headers.get("content-type") || "audio/mpeg",
+    word: normalizedWord,
+  };
+}
+
 function normalizeAlignmentEntry(
   entry,
   index,
@@ -1156,6 +1206,35 @@ const server = http.createServer(async (request, response) => {
         errorMessage: error?.message ?? String(error),
       });
       sendJson(response, 500, { error: error?.message ?? "Word lookup failed." });
+      return;
+    }
+  }
+
+  if (request.url === "/speak-word" && request.method === "POST") {
+    try {
+      const body = await readJsonBody(request);
+      const word = String(body?.word ?? "").trim();
+      const targetLanguage = String(body?.targetLanguage ?? "").trim();
+
+      if (!word) {
+        sendJson(response, 400, { error: "word is required." });
+        return;
+      }
+
+      if (!targetLanguage) {
+        sendJson(response, 400, { error: "targetLanguage is required." });
+        return;
+      }
+
+      const speech = await synthesizeWordAudio({ word, targetLanguage });
+      sendJson(response, 200, { speech });
+      return;
+    } catch (error) {
+      logServerEvent("speak-word-error", {
+        errorName: error?.name ?? null,
+        errorMessage: error?.message ?? String(error),
+      });
+      sendJson(response, 500, { error: error?.message ?? "Word speech failed." });
       return;
     }
   }

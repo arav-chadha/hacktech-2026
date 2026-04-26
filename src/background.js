@@ -1,6 +1,7 @@
 const BACKEND_TRANSLATE_ENDPOINT = "http://127.0.0.1:8787/translate";
 const BACKEND_LOOKUP_WORD_ENDPOINT = "http://127.0.0.1:8787/lookup-word";
 const BACKEND_WORD_FEEDBACK_ENDPOINT = "http://127.0.0.1:8787/word-feedback";
+const BACKEND_SPEAK_WORD_ENDPOINT = "http://127.0.0.1:8787/speak-word";
 
 async function readNdjsonStream(response, onEvent) {
   const reader = response.body?.getReader();
@@ -119,6 +120,31 @@ async function lookupWord({ word, targetLanguage }) {
   return responseData.lookup;
 }
 
+async function speakWord({ word, targetLanguage }) {
+  const response = await fetch(BACKEND_SPEAK_WORD_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      word,
+      targetLanguage,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Backend speech failed (${response.status}): ${errorText}`);
+  }
+
+  const responseData = await response.json();
+  if (!responseData?.speech || typeof responseData.speech !== "object") {
+    throw new Error(responseData?.error || "Backend returned an invalid speech response.");
+  }
+
+  return responseData.speech;
+}
+
 async function sendWordFeedback({ userEmail, targetLanguage, sourceTerm }) {
   const response = await fetch(BACKEND_WORD_FEEDBACK_ENDPOINT, {
     method: "POST",
@@ -176,6 +202,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then((lookup) => sendResponse({ lookup }))
       .catch((error) => {
         console.error("Word lookup failed:", error);
+        sendResponse({ error: error.message });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "SPEAK_WORD") {
+    speakWord(message.payload)
+      .then((speech) => sendResponse({ speech }))
+      .catch((error) => {
+        console.error("Word speech failed:", error);
         sendResponse({ error: error.message });
       });
 
