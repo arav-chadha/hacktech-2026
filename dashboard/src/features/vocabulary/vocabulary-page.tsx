@@ -193,8 +193,8 @@ export function VocabularyPage() {
     <div className="panel h-full min-h-[calc(100vh-2rem)] border-ink-200 bg-white p-6 sm:p-8">
       <PageHeader
         eyebrow="Vocabulary"
-        title="Your learned words, kept readable"
-        description="Use this table as the dependable source of truth for what has already entered your study loop. Search fast, sort clearly, and keep the controls close to the data."
+        title="Your learned words"
+        description="Search, filter, and manage your vocabulary with focused controls."
       />
 
       <Card className="mb-6">
@@ -310,6 +310,14 @@ export function VocabularyPage() {
           selectedNodeId={selectedSemanticNode?.id ?? null}
           languageLabels={languageLabels}
           onSelectNode={setSelectedSemanticNode}
+          searchQuery={filters.searchQuery}
+          onSearchChange={(query) => updateFilter("searchQuery", query)}
+          languageCode={filters.languageCode}
+          onLanguageChange={(code) => updateFilter("languageCode", code)}
+          level={filters.level}
+          onLevelChange={(level) => updateFilter("level", level as LearningLevel | "all")}
+          status={filters.status}
+          onStatusChange={(status) => updateFilter("status", status as VocabularyStatus | "all")}
         />
       </div>
 

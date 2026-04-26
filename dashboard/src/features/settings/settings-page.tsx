@@ -5,8 +5,7 @@ import { useDashboard } from "@/components/providers/dashboard-provider";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
-import type { LearningLevel, ReplacementDensity, StudySettings } from "@/lib/types/dashboard";
-import { formatDensityLabel } from "@/lib/utils/format";
+import type { LearningLevel, StudySettings } from "@/lib/types/dashboard";
 
 export function SettingsPage() {
   const { languages, settings, updateSettings, saving } = useDashboard();
@@ -38,8 +37,8 @@ export function SettingsPage() {
     <div className="panel h-full min-h-[calc(100vh-2rem)] border-ink-200 bg-white p-6 sm:p-8">
       <PageHeader
         eyebrow="Settings"
-        title="Tune the learning experience, not the noise"
-        description="Keep the controls focused on real learning behavior. These settings are intentionally narrow so future backend sync stays simple and predictable."
+        title="Learning preferences"
+        description="Configure your study experience and learning behavior."
       />
 
       <form className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(18rem,0.85fr)]" onSubmit={handleSubmit}>
@@ -88,27 +87,6 @@ export function SettingsPage() {
               </p>
             </div>
 
-            <div>
-              <label className="field-label" htmlFor="settings-density">
-                Word replacement density
-              </label>
-              <select
-                id="settings-density"
-                className="field-input"
-                value={formState.replacementDensity}
-                onChange={(event) =>
-                  updateField("replacementDensity", event.target.value as ReplacementDensity)
-                }
-              >
-                <option value="light">Light</option>
-                <option value="balanced">Balanced</option>
-                <option value="immersive">Immersive</option>
-              </select>
-              <p className="mt-2 text-sm text-ink-500">
-                Light keeps pages readable, balanced is the daily default, immersive pushes faster exposure.
-              </p>
-            </div>
-
             <div className="flex flex-wrap items-center gap-3">
               <Button type="submit" disabled={saving}>
                 {saving ? "Saving..." : "Save settings"}
@@ -132,12 +110,6 @@ export function SettingsPage() {
             <div className="rounded-xl border border-ink-100 bg-ink-50 p-4">
               <p className="text-sm font-medium text-ink-500">Level</p>
               <p className="mt-2 text-lg font-semibold text-ink-900">{formState.learningLevel}</p>
-            </div>
-            <div className="rounded-xl border border-ink-100 bg-ink-50 p-4">
-              <p className="text-sm font-medium text-ink-500">Replacement density</p>
-              <p className="mt-2 text-lg font-semibold text-ink-900">
-                {formatDensityLabel(formState.replacementDensity)}
-              </p>
             </div>
           </div>
         </Card>

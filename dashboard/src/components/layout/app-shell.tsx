@@ -26,7 +26,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-[#f4f6f8] px-4 py-4 text-ink-900 sm:px-6 lg:px-8">
       <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-7xl flex-col gap-4 lg:flex-row">
-        <aside className="panel w-full border-ink-200 bg-white/95 p-4 lg:w-72 lg:p-6">
+        <aside className="panel w-full border-ink-200 bg-white/95 p-4 lg:w-60 lg:p-4">
           <div className="flex items-center justify-between border-b border-ink-200 pb-4 lg:block">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink-400">
@@ -72,13 +72,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <p className="text-lg font-semibold text-ink-900">{activeLanguage?.label}</p>
                 <p className="mt-1 text-sm text-ink-500">{settings.learningLevel} level</p>
               </div>
-              <div className="text-right">
-                <p className="text-sm font-medium text-ink-800">{settings.replacementDensity}</p>
-                <p className="mt-1 text-xs uppercase tracking-[0.14em] text-ink-400">
-                  replacement density
-                </p>
-              </div>
-            </div>
+                          </div>
           </div>
         </aside>
 

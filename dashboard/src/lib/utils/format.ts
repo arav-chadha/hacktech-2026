@@ -11,9 +11,3 @@ export function formatCompactNumber(value: number) {
     maximumFractionDigits: 1,
   }).format(value);
 }
-
-export function formatDensityLabel(value: "light" | "balanced" | "immersive") {
-  if (value === "light") return "Light";
-  if (value === "balanced") return "Balanced";
-  return "Immersive";
-}
