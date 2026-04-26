@@ -99,34 +99,45 @@ async function streamTranslation({
 }
 
 async function lookupWord({ word, targetLanguage, userEmail }) {
-  try {
-    const embedResponse = await fetch(BACKEND_EMBED_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        word,
-        targetLanguage,
-        userEmail,
-      }),
-    });
+  await fetch(BACKEND_EMBED_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      word,
+      targetLanguage,
+      userEmail,
+    }),
+  });
+  // try {
+  //   const embedResponse = await fetch(BACKEND_EMBED_ENDPOINT, {
+  //     method: "POST",
+  //     headers: {
+  //       "Content-Type": "application/json",
+  //     },
+  //     body: JSON.stringify({
+  //       word,
+  //       targetLanguage,
+  //       userEmail,
+  //     }),
+  //   });
 
-    if (!embedResponse.ok) {
-      const embedErrorText = await embedResponse.text();
-      console.error(`Embedding request failed (${embedResponse.status}): ${embedErrorText}`);
-    } else {
-      const embedResponseData = await embedResponse.json();
-      console.log("Embedding request succeeded:", {
-        word,
-        targetLanguage,
-        cached: Boolean(embedResponseData?.cached),
-        ok: Boolean(embedResponseData?.ok),
-      });
-    }
-  } catch (error) {
-    console.error("Embedding request threw an error:", error);
-  }
+  //   if (!embedResponse.ok) {
+  //     const embedErrorText = await embedResponse.text();
+  //     console.error(`Embedding request failed (${embedResponse.status}): ${embedErrorText}`);
+  //   } else {
+  //     const embedResponseData = await embedResponse.json();
+  //     console.log("Embedding request succeeded:", {
+  //       word,
+  //       targetLanguage,
+  //       cached: Boolean(embedResponseData?.cached),
+  //       ok: Boolean(embedResponseData?.ok),
+  //     });
+  //   }
+  // } catch (error) {
+  //   console.error("Embedding request threw an error:", error);
+  // }
 
   const response = await fetch(BACKEND_LOOKUP_WORD_ENDPOINT, {
     method: "POST",
