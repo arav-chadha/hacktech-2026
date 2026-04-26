@@ -29,7 +29,7 @@ export function OverviewPage() {
     return () => {
       isActive = false;
     };
-  }, [range, repository, settings?.studyLanguageCode, settings?.learningLevel, settings?.replacementDensity]);
+  }, [range, repository, settings?.studyLanguageCode, settings?.learningLevel]);
 
   if (!settings || !stats) {
     return null;
@@ -48,8 +48,8 @@ export function OverviewPage() {
     <div className="panel h-full min-h-[calc(100vh-2rem)] border-ink-200 bg-white p-6 sm:p-8">
       <PageHeader
         eyebrow="Overview"
-        title="A cleaner view of your language growth"
-        description="Keep the main learning signals in one place: what language you are focusing on, how fast your vocabulary is growing, and which study habits are holding steady."
+        title="Language growth overview"
+        description="Track your vocabulary expansion and learning progress over time."
         aside={
           <div className="min-w-56">
             <label className="field-label" htmlFor="overview-language">
@@ -98,34 +98,7 @@ export function OverviewPage() {
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(18rem,0.9fr)]">
         <ProgressChart range={range} series={stats.progressSeries} onRangeChange={setRange} />
 
-        <Card className="h-fit">
-          <div className="border-b border-ink-100 pb-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink-400">
-              Recent movement
-            </p>
-            <h2 className="mt-2 text-lg font-semibold text-ink-900">Momentum this week</h2>
-            <p className="mt-2 text-sm leading-6 text-ink-500">
-              Small events that explain the trend in your chart without adding noisy analytics.
-            </p>
-          </div>
-
-          <div className="mt-5 space-y-4">
-            {stats.recentActivity.map((item) => (
-              <div key={item.id} className="rounded-xl border border-ink-100 bg-ink-50 p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h3 className="text-sm font-semibold text-ink-900">{item.title}</h3>
-                    <p className="mt-2 text-sm leading-6 text-ink-500">{item.detail}</p>
-                  </div>
-                  <span className="shrink-0 text-xs font-medium uppercase tracking-[0.14em] text-ink-400">
-                    {item.dateLabel}
-                  </span>
-                </div>
               </div>
-            ))}
-          </div>
-        </Card>
-      </div>
     </div>
   );
 }

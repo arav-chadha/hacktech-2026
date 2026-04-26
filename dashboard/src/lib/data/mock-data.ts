@@ -13,7 +13,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_SETTINGS: StudySettings = {
   studyLanguageCode: "es",
   learningLevel: "Intermediate",
-  replacementDensity: "balanced",
 };
 
 export const AVAILABLE_LANGUAGES: StudyLanguage[] = [
@@ -73,12 +72,6 @@ const LANGUAGE_PROGRESS_MULTIPLIER: Record<string, number> = {
   ja: 0.72,
 };
 
-const DENSITY_OFFSET: Record<StudySettings["replacementDensity"], number> = {
-  light: -1,
-  balanced: 0,
-  immersive: 2,
-};
-
 const LEVEL_OFFSET: Record<LearningLevel, number> = {
   Beginner: -1,
   Elementary: 0,
@@ -116,7 +109,6 @@ function sliceProgressRange(series: ProgressPoint[], range: ProgressRange) {
 export function buildProgressSeries(settings: StudySettings, range: ProgressRange): ProgressPoint[] {
   const totalDays = 120;
   const multiplier = LANGUAGE_PROGRESS_MULTIPLIER[settings.studyLanguageCode] ?? 1;
-  const densityOffset = DENSITY_OFFSET[settings.replacementDensity];
   const levelOffset = LEVEL_OFFSET[settings.learningLevel];
   const series: ProgressPoint[] = [];
   let cumulativeWords = 0;
@@ -127,7 +119,7 @@ export function buildProgressSeries(settings: StudySettings, range: ProgressRang
     const trend = index > 80 ? 1.2 : index > 30 ? 0.6 : 0;
     const discoveredWords = Math.max(
       1,
-      Math.round((4 + waveA + waveB + trend + densityOffset + levelOffset) * multiplier)
+      Math.round((4 + waveA + waveB + trend + levelOffset) * multiplier)
     );
 
     cumulativeWords += discoveredWords;
@@ -156,7 +148,7 @@ export function buildRecentActivity(settings: StudySettings) {
     {
       id: "activity-2",
       title: "Review pace improved",
-      detail: "Three-day streak held steady with balanced replacement density.",
+      detail: "Three-day streak held steady with a consistent review pace.",
       dateLabel: "Yesterday",
     },
     {

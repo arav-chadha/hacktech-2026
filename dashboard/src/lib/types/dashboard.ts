@@ -1,7 +1,5 @@
 export type LearningLevel = "Beginner" | "Elementary" | "Intermediate" | "Advanced";
 
-export type ReplacementDensity = "light" | "balanced" | "immersive";
-
 export type VocabularyStatus = "New" | "Practicing" | "Confident";
 
 export type ProgressRange = "7d" | "30d" | "90d" | "all";
@@ -24,7 +22,6 @@ export interface StudyLanguage {
 export interface StudySettings {
   studyLanguageCode: string;
   learningLevel: LearningLevel;
-  replacementDensity: ReplacementDensity;
 }
 
 export interface ProgressPoint {

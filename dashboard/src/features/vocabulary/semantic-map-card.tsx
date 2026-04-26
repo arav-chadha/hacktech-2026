@@ -34,6 +34,14 @@ type SemanticMapCardProps = {
   selectedNodeId: string | null;
   languageLabels: Record<string, string>;
   onSelectNode: (node: SemanticGraphNode | null) => void;
+  searchQuery?: string;
+  onSearchChange?: (query: string) => void;
+  languageCode?: string;
+  onLanguageChange?: (code: string) => void;
+  level?: string;
+  onLevelChange?: (level: string) => void;
+  status?: string;
+  onStatusChange?: (status: string) => void;
 };
 
 type GraphMode = "inline" | "modal";
@@ -96,15 +104,15 @@ const DEFAULT_LANGUAGE_COLORS: Record<string, string> = {
 };
 
 const DEFAULT_MAP_STYLES: MapStyleState = {
-  anchorSize: 17.8,
-  learnedSize: 8.4,
-  anchorLineWidth: 3,
-  neighborLineWidth: 1.6,
+  anchorSize: 8.9,
+  learnedSize: 4.2,
+  anchorLineWidth: 1.5,
+  neighborLineWidth: 0.8,
   cameraDistance: 152,
-  anchorLabelFontSize: 168,
-  learnedLabelFontSize: 84,
-  hoverLabelFontSize: 40,
-  labelCardScale: 2,
+  anchorLabelFontSize: 70,
+  learnedLabelFontSize: 60,
+  hoverLabelFontSize: 20,
+  labelCardScale: 1,
   labelYOffset: 0,
   showAnchorLabels: true,
   showLearnedLabels: true,
@@ -181,7 +189,7 @@ function useElementSize<T extends HTMLElement>(
   return size;
 }
 
-function buildTextSprite(text: string, fontSize: number, color: string) {
+function buildTextSprite(text: string, fontSize: number, color: string, isMultiline = false) {
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
 
@@ -189,10 +197,20 @@ function buildTextSprite(text: string, fontSize: number, color: string) {
     return null;
   }
 
-  context.font = `600 ${fontSize}px "Segoe UI Variable", "Aptos", sans-serif`;
-  const metrics = context.measureText(text);
-  const width = Math.max(90, Math.ceil(metrics.width + 38));
-  const height = Math.max(48, Math.ceil(fontSize * 2));
+  const lines = isMultiline ? text.split('\n') : [text];
+  const isLearnedLabel = isMultiline && lines.length === 2;
+  
+  // Calculate dimensions with different font sizes for learned labels
+  const maxLineWidth = Math.max(...lines.map((line, index) => {
+    const lineFontSize = isLearnedLabel && index === 1 ? fontSize : fontSize * 1.2;
+    const fontWeight = isLearnedLabel && index === 1 ? "600" : "700";
+    context.font = `${fontWeight} ${lineFontSize}px "Segoe UI Variable", "Aptos", sans-serif`;
+    return context.measureText(line).width;
+  }));
+  
+  const width = Math.max(84, Math.ceil(maxLineWidth + 36));
+  const lineHeight = fontSize * 1.4;
+  const height = Math.max(44, Math.ceil(lineHeight * lines.length + 20));
 
   canvas.width = width;
   canvas.height = height;
@@ -202,18 +220,25 @@ function buildTextSprite(text: string, fontSize: number, color: string) {
     return null;
   }
 
-  drawContext.font = `600 ${fontSize}px "Segoe UI Variable", "Aptos", sans-serif`;
-  drawContext.fillStyle = "rgba(255, 255, 255, 0.94)";
-  drawContext.strokeStyle = "rgba(219, 228, 238, 0.98)";
+  drawContext.fillStyle = "rgba(255, 255, 255, 0.92)";
+  drawContext.strokeStyle = "rgba(219, 228, 238, 0.95)";
   drawContext.lineWidth = 2;
   drawContext.beginPath();
   drawContext.roundRect(1, 1, width - 2, height - 2, 12);
   drawContext.fill();
   drawContext.stroke();
+  
   drawContext.fillStyle = color;
   drawContext.textAlign = "center";
   drawContext.textBaseline = "middle";
-  drawContext.fillText(text, width / 2, height / 2);
+  
+  const startY = height / 2 - (lines.length - 1) * lineHeight / 2;
+  lines.forEach((line, index) => {
+    const lineFontSize = isLearnedLabel && index === 1 ? fontSize : fontSize * 1.2;
+    const fontWeight = isLearnedLabel && index === 1 ? "600" : "700";
+    drawContext.font = `${fontWeight} ${lineFontSize}px "Segoe UI Variable", "Aptos", sans-serif`;
+    drawContext.fillText(line, width / 2, startY + index * lineHeight);
+  });
 
   const texture = new CanvasTexture(canvas);
   texture.needsUpdate = true;
@@ -222,6 +247,7 @@ function buildTextSprite(text: string, fontSize: number, color: string) {
     map: texture,
     transparent: true,
     depthWrite: false,
+    depthTest: false,
   });
 
   const sprite = new Sprite(material);
@@ -378,7 +404,7 @@ function SemanticMapStylePanel({
           <input
             type="range"
             min="18"
-            max="42"
+            max="90"
             step="1"
             value={mapStyles.anchorLabelFontSize}
             onChange={(event) =>
@@ -396,7 +422,7 @@ function SemanticMapStylePanel({
           <input
             type="range"
             min="12"
-            max="32"
+            max="84"
             step="1"
             value={mapStyles.learnedLabelFontSize}
             onChange={(event) =>
@@ -546,15 +572,22 @@ function SemanticNodeDetailsPanel({
   languageLabels,
   onSelectNode,
   className,
+  mode,
 }: {
   selectedNode: SemanticGraphNode | null;
   relatedLearnedNodes: SemanticLearnedWordNode[];
   languageLabels: Record<string, string>;
   onSelectNode: (node: SemanticGraphNode | null) => void;
   className?: string;
+  mode: string;
 }) {
   return (
-    <div className={cn("rounded-xl border border-ink-100 bg-ink-50/50 p-5", className)}>
+    <div
+      className={cn(
+        "rounded-xl border border-ink-100 bg-ink-50/50 p-5 overflow-y-auto",
+        mode === "modal" && "min-h-0 max-h-full"
+      )}
+    >
       {!selectedNode ? (
         <>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-ink-400">
@@ -666,6 +699,7 @@ function SemanticGraphCanvas({
   const graphRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [isDeselecting, setIsDeselecting] = useState(false);
   const { width, height } = useElementSize(
     containerRef,
     mode === "modal" ? { width: 1100, height: 640 } : { width: 900, height: 560 }
@@ -673,7 +707,7 @@ function SemanticGraphCanvas({
 
   const focusNode = useCallback(
     (node: GraphNode | null, duration = 720) => {
-      if (!node || !graphRef.current) {
+      if (!node || !graphRef.current || isDeselecting) {
         return;
       }
 
@@ -776,6 +810,29 @@ function SemanticGraphCanvas({
     focusNode(node);
   }, [focusNode, graphData.nodes, selectedNodeId]);
 
+  useEffect(() => {
+    if (!graphRef.current) return;
+
+    // Configure controls for smoother zoom and better behavior
+    const controls = graphRef.current.controls();
+    if (controls) {
+      // Enable smoother zooming
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.enableZoom = true;
+      controls.enableRotate = true;
+      controls.enablePan = true;
+      
+      // Configure zoom limits for smoother experience
+      controls.minDistance = 10;
+      controls.maxDistance = 500;
+      controls.zoomSpeed = 0.8;
+      
+      // Update controls
+      controls.update();
+    }
+  }, [graphData]);
+
   return (
     <div ref={containerRef} className="flex-1 overflow-hidden rounded-xl border border-ink-100 bg-white">
       <ForceGraph3D
@@ -789,6 +846,8 @@ function SemanticGraphCanvas({
         backgroundColor="#ffffff"
         enableNodeDrag
         showNavInfo={false}
+        enableNavigationControls={true}
+        controlType="trackball"
         linkOpacity={0.38}
         linkColor={(link) =>
           (link as GraphLink).kind === "anchor"
@@ -824,7 +883,7 @@ function SemanticGraphCanvas({
                       : "#4b5563"
                     : typedNode.color,
               transparent: true,
-              opacity: 0.98,
+              opacity: 0.7,
             })
           );
           group.add(sphere);
@@ -836,18 +895,28 @@ function SemanticGraphCanvas({
             isHovered;
 
           if (shouldShowLabel) {
-            const sprite = buildTextSprite(
-              typedNode.label,
-              typedNode.kind === "anchor"
-                ? mapStyles.anchorLabelFontSize
-                : typedNode.kind === "learned-word" && mapStyles.showLearnedLabels
-                  ? mapStyles.learnedLabelFontSize
-                  : mapStyles.hoverLabelFontSize,
-              "#0f172a"
-            );
+            let labelText = typedNode.label;
+            let fontSize = mapStyles.hoverLabelFontSize;
+            let isMultiline = false;
+            
+            if (typedNode.kind === "anchor") {
+              fontSize = mapStyles.anchorLabelFontSize;
+            } else if (typedNode.kind === "learned-word" && mapStyles.showLearnedLabels) {
+              fontSize = mapStyles.learnedLabelFontSize;
+              // Show both learned word and source word for learned nodes
+              labelText = `${typedNode.learnedWord}\n${typedNode.sourceWord}`;
+              isMultiline = true;
+            }
+            
+            const sprite = buildTextSprite(labelText, fontSize, "#0f172a", isMultiline);
 
             if (sprite) {
-              sprite.position.set(0, typedNode.size + (typedNode.kind === "anchor" ? 3.2 : 2.4), 0);
+              // Position label on top of the sphere with offset
+              const offset = typedNode.size + (typedNode.kind === "anchor" ? 3.2 : 2.4) + mapStyles.labelYOffset;
+              sprite.position.set(0, offset, 0);
+              // Apply scale to the card
+              const cardScale = mapStyles.labelCardScale;
+              sprite.scale.set(sprite.scale.x * cardScale, sprite.scale.y * cardScale, 1);
               group.add(sprite);
             }
           }
@@ -855,7 +924,12 @@ function SemanticGraphCanvas({
           return group;
         }}
         onNodeClick={(node: object) => onSelectNode(node as GraphNode)}
-        onBackgroundClick={() => onSelectNode(null)}
+        onBackgroundClick={(event) => {
+    event?.preventDefault?.();
+    setIsDeselecting(true);
+    onSelectNode(null);
+    setTimeout(() => setIsDeselecting(false), 100);
+  }}
         onNodeHover={(node) => setHoveredNodeId((node as GraphNode | null)?.id ?? null)}
       />
     </div>
@@ -896,14 +970,12 @@ function SemanticMapViewport({
   const graphApiRef = useRef<GraphViewportApi | null>(null);
 
   return (
-    <div
-      className={cn(
-        "grid gap-5",
-        mode === "modal"
-          ? "flex-1 min-h-0 xl:grid-cols-[minmax(0,1.8fr)_minmax(22rem,0.72fr)]"
-          : "xl:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)]"
-      )}
-    >
+    <div className={cn(
+      "grid gap-5 flex-1",
+      mode === "modal"
+        ? "min-h-0 xl:grid-cols-[minmax(0,1.8fr)_minmax(22rem,0.72fr)]"
+        : "xl:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)]"
+    )}>
       <div className="flex min-h-0 flex-col rounded-xl border border-ink-100 bg-ink-50/60 p-3">
         <SemanticMapToolbar
           languageColorEntries={languageColorEntries}
@@ -923,7 +995,7 @@ function SemanticMapViewport({
           />
         ) : null}
 
-        <div className={cn("flex min-h-0 flex-1 flex-col", mode === "modal" ? "min-h-[30rem]" : "min-h-[34rem]")}>
+        <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", mode === "modal" ? "min-h-[20rem]" : "min-h-[34rem]")}>
           <SemanticGraphCanvas
             mode={mode}
             graphData={graphData}
@@ -936,11 +1008,7 @@ function SemanticMapViewport({
           />
         </div>
 
-        <p className="mt-3 px-1 text-sm text-ink-500">
-          Orbit, pan, and zoom with the mouse. Focus and reset use the active graph viewport, and
-          the always-on anchor labels are sized separately from hover labels.
-        </p>
-      </div>
+              </div>
 
       <SemanticNodeDetailsPanel
         selectedNode={selectedNode}
@@ -948,6 +1016,7 @@ function SemanticMapViewport({
         languageLabels={languageLabels}
         onSelectNode={onSelectNode}
         className={cn(mode === "modal" && "min-h-0 overflow-y-auto")}
+        mode={mode}
       />
     </div>
   );
@@ -1034,6 +1103,14 @@ function SemanticMapOverlay(props: {
   onToggleStylePanel: () => void;
   onSelectNode: (node: SemanticGraphNode | null) => void;
   onClose: () => void;
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
+  languageCode: string;
+  onLanguageChange: (code: string) => void;
+  level: string;
+  onLevelChange: (level: string) => void;
+  status: string;
+  onStatusChange: (status: string) => void;
 }) {
   const {
     isOpen,
@@ -1049,6 +1126,14 @@ function SemanticMapOverlay(props: {
     onToggleStylePanel,
     onSelectNode,
     onClose,
+    searchQuery,
+    onSearchChange,
+    languageCode,
+    onLanguageChange,
+    level,
+    onLevelChange,
+    status,
+    onStatusChange,
   } = props;
 
   useBodyScrollLock(isOpen);
@@ -1059,7 +1144,7 @@ function SemanticMapOverlay(props: {
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-2 sm:p-4">
       <button
         type="button"
         aria-label="Close semantic map fullscreen"
@@ -1068,18 +1153,80 @@ function SemanticMapOverlay(props: {
       />
 
       <div
-        className="relative z-10 h-[min(88vh,960px)] w-full max-w-[1500px]"
+        className="relative z-10 h-[calc(100vh-1rem)] w-full max-w-[1600px]"
         onClick={(event) => event.stopPropagation()}
       >
-        <Card className="flex h-full flex-col p-6">
-          <div className="mb-6 flex items-start justify-between gap-4">
-            <SectionHeading
-              title="Semantic map"
-              description="Explore the semantic map in a focused fullscreen view while keeping node details visible beside the graph."
-            />
-            <Button variant="secondary" onClick={onClose}>
-              Close
-            </Button>
+        <Card className="flex h-full flex-col p-4">
+          {/* Filter Bar */}
+          <div className="mb-4 rounded-xl border border-ink-100 bg-ink-50/60 p-4">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+              <div className="xl:col-span-2">
+                <label className="field-label" htmlFor="vocabulary-search-fs">
+                  Search words
+                </label>
+                <input
+                  id="vocabulary-search-fs"
+                  className="field-input"
+                  value={searchQuery}
+                  onChange={(event) => onSearchChange(event.target.value)}
+                  placeholder="Search English or translated words"
+                />
+              </div>
+
+              <div>
+                <label className="field-label" htmlFor="vocabulary-language-fs">
+                  Language
+                </label>
+                <select
+                  id="vocabulary-language-fs"
+                  className="field-input"
+                  value={languageCode}
+                  onChange={(event) => onLanguageChange(event.target.value)}
+                >
+                  <option value="all">All languages</option>
+                  {languageColorEntries.map((entry) => (
+                    <option key={entry.code} value={entry.code}>
+                      {entry.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="field-label" htmlFor="vocabulary-level-fs">
+                  Level
+                </label>
+                <select
+                  id="vocabulary-level-fs"
+                  className="field-input"
+                  value={level}
+                  onChange={(event) => onLevelChange(event.target.value)}
+                >
+                  <option value="all">All levels</option>
+                  <option value="Beginner">Beginner</option>
+                  <option value="Elementary">Elementary</option>
+                  <option value="Intermediate">Intermediate</option>
+                  <option value="Advanced">Advanced</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="field-label" htmlFor="vocabulary-status-fs">
+                  Status
+                </label>
+                <select
+                  id="vocabulary-status-fs"
+                  className="field-input"
+                  value={status}
+                  onChange={(event) => onStatusChange(event.target.value)}
+                >
+                  <option value="all">All statuses</option>
+                  <option value="New">New</option>
+                  <option value="Practicing">Practicing</option>
+                  <option value="Confident">Confident</option>
+                </select>
+              </div>
+            </div>
           </div>
 
           <SemanticMapViewport
@@ -1110,6 +1257,14 @@ export function SemanticMapCard({
   selectedNodeId,
   languageLabels,
   onSelectNode,
+  searchQuery = "",
+  onSearchChange = () => {},
+  languageCode = "all",
+  onLanguageChange = () => {},
+  level = "all",
+  onLevelChange = () => {},
+  status = "all",
+  onStatusChange = () => {},
 }: SemanticMapCardProps) {
   const [isFullscreenOpen, setIsFullscreenOpen] = useState(false);
   const [isStylePanelOpen, setIsStylePanelOpen] = useState(false);
@@ -1187,6 +1342,14 @@ export function SemanticMapCard({
         onToggleStylePanel={() => setIsStylePanelOpen((current) => !current)}
         onSelectNode={onSelectNode}
         onClose={() => setIsFullscreenOpen(false)}
+        searchQuery={searchQuery}
+        onSearchChange={onSearchChange}
+        languageCode={languageCode}
+        onLanguageChange={onLanguageChange}
+        level={level}
+        onLevelChange={onLevelChange}
+        status={status}
+        onStatusChange={onStatusChange}
       />
     </>
   );

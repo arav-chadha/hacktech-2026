@@ -19,23 +19,30 @@ type PersistedDashboardState = {
   settings: StudySettings;
 };
 
+function sanitizeSettings(settings?: Partial<StudySettings> | null): StudySettings {
+  return {
+    studyLanguageCode: settings?.studyLanguageCode ?? DEFAULT_SETTINGS.studyLanguageCode,
+    learningLevel: settings?.learningLevel ?? DEFAULT_SETTINGS.learningLevel,
+  };
+}
+
 function readPersistedState(): PersistedDashboardState {
   if (typeof window === "undefined") {
-    return { settings: DEFAULT_SETTINGS };
+    return { settings: sanitizeSettings(DEFAULT_SETTINGS) };
   }
 
   const raw = window.localStorage.getItem(STORAGE_KEY);
   if (!raw) {
-    return { settings: DEFAULT_SETTINGS };
+    return { settings: sanitizeSettings(DEFAULT_SETTINGS) };
   }
 
   try {
     const parsed = JSON.parse(raw) as Partial<PersistedDashboardState>;
     return {
-      settings: parsed.settings ?? DEFAULT_SETTINGS,
+      settings: sanitizeSettings(parsed.settings),
     };
   } catch {
-    return { settings: DEFAULT_SETTINGS };
+    return { settings: sanitizeSettings(DEFAULT_SETTINGS) };
   }
 }
 
@@ -76,8 +83,9 @@ export function createDashboardRepository(): DashboardRepository {
 
     async updateStudySettings(input: StudySettings) {
       // BACKEND_INTEGRATION: Replace local persistence with a settings mutation request.
-      writePersistedState({ settings: input });
-      return input;
+      const sanitizedSettings = sanitizeSettings(input);
+      writePersistedState({ settings: sanitizedSettings });
+      return sanitizedSettings;
     },
 
     async getAvailableLanguages(): Promise<StudyLanguage[]> {
