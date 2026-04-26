@@ -126,16 +126,16 @@ function buildTranslationPrompt(targetLanguage, settings, priorityWords = []) {
           describeLengthBias(settings?.phraseLengthTemperature ?? 0.5),
         ];
 
-  // if (priorityWords.length > 0) {
-  //   promptLines.push(
-  //     "If any of these English source terms appear in the input, prioritize translating them before other eligible words."
-  //   );
-  //   promptLines.push(
-  //     `Priority words present in this paragraph: ${priorityWords
-  //       .map((word) => word.sourceWord)
-  //       .join(", ")}`
-  //   );
-  // }
+  if (priorityWords.length > 0) {
+    promptLines.push(
+      "If any of these English source terms appear in the input, prioritize translating them before other eligible words."
+    );
+    promptLines.push(
+      `Priority words present in this paragraph: ${priorityWords
+        .map((word) => word.sourceWord)
+        .join(", ")}`
+    );
+  }
   promptLines.push(getPromptSuffix(translationLevel));
   return promptLines.join("\n");
 }
