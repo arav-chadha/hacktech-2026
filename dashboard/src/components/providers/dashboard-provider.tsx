@@ -20,18 +20,18 @@ const DashboardContext = createContext<DashboardContextValue | null>(null);
 const repository = createDashboardRepository();
 
 export function DashboardProvider({ children }: { children: ReactNode }) {
-  const auth = useDashboardAuth();
+  const { email, loading, resetSession } = useDashboardAuth();
   const [settings, setSettings] = useState<StudySettings | null>(null);
   const [languages, setLanguages] = useState<StudyLanguage[]>([]);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (auth.loading) {
+    if (loading) {
       return;
     }
 
-    if (!auth.email) {
+    if (!email) {
       setSettings(null);
       setLanguages([]);
       setReady(false);
@@ -52,6 +52,17 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         setLanguages(availableLanguages);
         setReady(true);
       } catch (loadError) {
+        const normalizedError =
+          loadError instanceof Error
+            ? loadError
+            : new Error("Failed to load dashboard bootstrap data.");
+        const dashboardError = normalizedError as Error & { status?: number };
+
+        if (dashboardError.status === 401) {
+          resetSession(normalizedError);
+          return;
+        }
+
         console.error("Failed to load dashboard bootstrap data:", loadError);
         if (isActive) {
           setSettings(null);
@@ -67,7 +78,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     return () => {
       isActive = false;
     };
-  }, [auth.email, auth.loading]);
+  }, [email, loading, resetSession]);
 
   async function updateSettings(nextSettings: StudySettings) {
     setSaving(true);

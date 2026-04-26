@@ -10,6 +10,7 @@ type DashboardAuthContextValue = {
   error: Error | null;
   signIn: () => Promise<string | null>;
   logout: () => Promise<void>;
+  resetSession: (error?: Error | null) => void;
 };
 
 type DashboardSessionResponse = {
@@ -131,6 +132,12 @@ export function DashboardAuthProvider({ children }: { children: ReactNode }) {
   const tokenClientRef = useRef<GoogleTokenClient | null>(null);
   const pendingSignInRef = useRef<PendingSignInState | null>(null);
 
+  function resetSession(nextError: Error | null = null) {
+    setEmail(null);
+    setLoading(false);
+    setError(nextError);
+  }
+
   function settlePendingSignIn(result: { email?: string | null; error?: Error | null }) {
     const pendingState = pendingSignInRef.current;
     pendingSignInRef.current = null;
@@ -236,7 +243,7 @@ export function DashboardAuthProvider({ children }: { children: ReactNode }) {
         const sessionStatus = (normalizedError as Error & { status?: number }).status;
 
         if (sessionStatus === 401) {
-          setEmail(null);
+          resetSession(null);
           return;
         }
 
@@ -299,6 +306,7 @@ export function DashboardAuthProvider({ children }: { children: ReactNode }) {
         error,
         signIn,
         logout,
+        resetSession,
       }}
     >
       {children}
