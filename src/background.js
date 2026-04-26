@@ -4,6 +4,7 @@ const BACKEND_WORD_FEEDBACK_ENDPOINT = "http://127.0.0.1:8787/word-feedback";
 const BACKEND_LANGUAGE_EXP_ENDPOINT = "http://127.0.0.1:8787/language-exp";
 const BACKEND_LANGUAGE_PROFILE_ENDPOINT = "http://127.0.0.1:8787/language-profile";
 const BACKEND_SPEAK_WORD_ENDPOINT = "http://127.0.0.1:8787/speak-word";
+const BACKEND_EMBED_ENDPOINT = "http://127.0.0.1:8787/embed";
 
 async function readNdjsonStream(response, onEvent) {
   const reader = response.body?.getReader();
@@ -97,7 +98,36 @@ async function streamTranslation({
   }
 }
 
-async function lookupWord({ word, targetLanguage }) {
+async function lookupWord({ word, targetLanguage, userEmail }) {
+  try {
+    const embedResponse = await fetch(BACKEND_EMBED_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        word,
+        targetLanguage,
+        userEmail,
+      }),
+    });
+
+    if (!embedResponse.ok) {
+      const embedErrorText = await embedResponse.text();
+      console.error(`Embedding request failed (${embedResponse.status}): ${embedErrorText}`);
+    } else {
+      const embedResponseData = await embedResponse.json();
+      console.log("Embedding request succeeded:", {
+        word,
+        targetLanguage,
+        cached: Boolean(embedResponseData?.cached),
+        ok: Boolean(embedResponseData?.ok),
+      });
+    }
+  } catch (error) {
+    console.error("Embedding request threw an error:", error);
+  }
+
   const response = await fetch(BACKEND_LOOKUP_WORD_ENDPOINT, {
     method: "POST",
     headers: {

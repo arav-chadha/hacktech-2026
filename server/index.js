@@ -28,7 +28,12 @@ import {
   recordTranslatedWordExp,
   recordWordFeedback,
 } from "./learningStore.js";
-import { hasMongoConfig } from "./mongo.js";
+import {
+  ensureWordEmbeddingIndexes,
+  getCollectionNames,
+  getMongoDatabase,
+  hasMongoConfig,
+} from "./mongo.js";
 
 
 const SERVER_HOST = "127.0.0.1";
@@ -71,6 +76,132 @@ function delay(ms) {
 
 function logServerEvent(event, details = {}) {
   console.log(`[translation-server] ${event}`, details);
+}
+
+function normalizeEmail(email) {
+  return String(email ?? "").trim().toLowerCase();
+}
+
+function normalizeWord(word) {
+  return String(word ?? "").trim().toLowerCase();
+}
+
+function normalizeTargetLanguage(targetLanguage) {
+  return String(targetLanguage ?? "").trim();
+}
+
+async function findStoredWordEmbedding({
+  userEmail,
+  word,
+  targetLanguage,
+}) {
+  if (!hasMongoConfig()) {
+    return null;
+  }
+
+  const userEmailLower = normalizeEmail(userEmail);
+  const wordNormalized = normalizeWord(word);
+  const normalizedTargetLanguage = normalizeTargetLanguage(targetLanguage);
+
+  if (!userEmailLower || !wordNormalized || !normalizedTargetLanguage) {
+    return null;
+  }
+
+  await ensureWordEmbeddingIndexes();
+  const db = await getMongoDatabase();
+  if (!db) {
+    return null;
+  }
+
+  const { wordEmbeddings } = getCollectionNames();
+  return db.collection(wordEmbeddings).findOne(
+    {
+      userEmailLower,
+      targetLanguage: normalizedTargetLanguage,
+      wordNormalized,
+    },
+    {
+      projection: {
+        _id: 0,
+        word: 1,
+        targetLanguage: 1,
+        userEmail: 1,
+        embedding: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    }
+  );
+}
+
+async function storeWordEmbedding({
+  userEmail,
+  word,
+  targetLanguage,
+  embedding,
+}) {
+  if (!hasMongoConfig()) {
+    return { ok: false, disabled: true };
+  }
+
+  const userEmailLower = normalizeEmail(userEmail);
+  const normalizedWord = String(word ?? "").trim();
+  const wordNormalized = normalizeWord(word);
+  const normalizedTargetLanguage = normalizeTargetLanguage(targetLanguage);
+
+  if (
+    !userEmailLower ||
+    !wordNormalized ||
+    !normalizedTargetLanguage ||
+    !Array.isArray(embedding) ||
+    embedding.length === 0
+  ) {
+    return { ok: false, disabled: false };
+  }
+
+  await ensureWordEmbeddingIndexes();
+  const db = await getMongoDatabase();
+  if (!db) {
+    return { ok: false, disabled: true };
+  }
+
+  const { wordEmbeddings } = getCollectionNames();
+  const now = new Date();
+
+  const writeResult = await db.collection(wordEmbeddings).updateOne(
+    {
+      userEmailLower,
+      targetLanguage: normalizedTargetLanguage,
+      wordNormalized,
+    },
+    {
+      $setOnInsert: {
+        createdAt: now,
+        userEmailLower,
+        targetLanguage: normalizedTargetLanguage,
+        wordNormalized,
+      },
+      $set: {
+        updatedAt: now,
+        userEmail: String(userEmail ?? "").trim(),
+        word: normalizedWord,
+        embedding,
+      },
+    },
+    {
+      upsert: true,
+    }
+  );
+
+  const storedOk = writeResult.acknowledged && (writeResult.matchedCount > 0 || writeResult.upsertedCount > 0);
+
+  return {
+    ok: storedOk,
+    disabled: false,
+    matchedCount: writeResult.matchedCount ?? 0,
+    modifiedCount: writeResult.modifiedCount ?? 0,
+    upsertedCount: writeResult.upsertedCount ?? 0,
+  };
 }
 
 function describeLengthBias(temperature) {
@@ -1189,6 +1320,131 @@ const server = http.createServer(async (request, response) => {
 
   if (request.url === "/health" && request.method === "GET") {
     sendJson(response, 200, { ok: true, mongoEnabled: hasMongoConfig() });
+    return;
+  }
+
+  if (request.url === "/embed" && request.method === "POST") {
+    try {
+      const body = await readJsonBody(request);
+      const userEmail = String(body?.userEmail ?? "").trim();
+      const word = String(body?.word ?? "").trim();
+      const targetLanguage = normalizeTargetLanguage(body?.targetLanguage);
+      logServerEvent("embed-request-received", {
+        hasUserEmail: Boolean(userEmail),
+        hasWord: Boolean(word),
+        hasTargetLanguage: Boolean(targetLanguage),
+        word,
+        targetLanguage,
+      });
+
+      if (!userEmail || !word || !targetLanguage) {
+        logServerEvent("embed-request-invalid", {
+          hasUserEmail: Boolean(userEmail),
+          hasWord: Boolean(word),
+          hasTargetLanguage: Boolean(targetLanguage),
+        });
+        sendJson(response, 400, { error: "userEmail, word, and targetLanguage are required." });
+        return;
+      }
+
+      if (!openAIClient) {
+        logServerEvent("embed-openai-misconfigured", {});
+        sendJson(response, 500, {
+          error: "Missing OpenAI API key. Set OPENAI_API_KEY or LOCAL_OPENAI_API_KEY.",
+        });
+        return;
+      }
+
+      if (!hasMongoConfig()) {
+        logServerEvent("embed-mongo-misconfigured", {});
+        sendJson(response, 500, {
+          error: "Missing MongoDB configuration. Embeddings storage is unavailable.",
+        });
+        return;
+      }
+
+      const existingEmbedding = await findStoredWordEmbedding({
+        userEmail,
+        word,
+        targetLanguage,
+      });
+
+      if (existingEmbedding?.embedding) {
+        logServerEvent("embed-cache-hit", {
+          word,
+          targetLanguage,
+          userEmail,
+        });
+        sendJson(response, 200, {
+          ok: true,
+          cached: true,
+          embedding: existingEmbedding.embedding,
+          word: existingEmbedding.word ?? word,
+          targetLanguage: existingEmbedding.targetLanguage ?? targetLanguage,
+          userEmail: existingEmbedding.userEmail ?? userEmail,
+        });
+        return;
+      }
+
+      const embeddingResponse = await openAIClient.embeddings.create({
+        model: "text-embedding-3-small",
+        input: [word],
+      });
+      const embedding = embeddingResponse?.data?.[0]?.embedding;
+      logServerEvent("embed-openai-response", {
+        word,
+        targetLanguage,
+        embeddingLength: Array.isArray(embedding) ? embedding.length : 0,
+      });
+
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        logServerEvent("embed-openai-empty", {
+          word,
+          targetLanguage,
+        });
+        sendJson(response, 500, { error: "Embedding request returned no embedding." });
+        return;
+      }
+
+      const storeResult = await storeWordEmbedding({
+        userEmail,
+        word,
+        targetLanguage,
+        embedding,
+      });
+
+      logServerEvent("embed-store-result", {
+        word,
+        targetLanguage,
+        userEmail,
+        ...storeResult,
+      });
+
+      if (!storeResult.ok) {
+        sendJson(response, 500, {
+          error: "Embedding was created but could not be stored.",
+          storeResult,
+        });
+        return;
+      }
+
+      sendJson(response, 200, {
+        ok: true,
+        cached: false,
+        embedding,
+        word,
+        targetLanguage,
+        userEmail,
+      });
+    } catch (error) {
+      logServerEvent("embed-request-failed", {
+        errorMessage: error?.message ?? String(error),
+        errorStack: error?.stack ?? null,
+      });
+      sendJson(response, 500, {
+        error: error?.message ?? String(error),
+      });
+    }
     return;
   }
 

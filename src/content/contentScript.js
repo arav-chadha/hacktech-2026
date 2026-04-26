@@ -434,6 +434,7 @@ async function fetchWordLookup(word, targetLanguage) {
                 payload: {
                     word,
                     targetLanguage,
+                    userEmail
                 },
             },
             (response) => {
