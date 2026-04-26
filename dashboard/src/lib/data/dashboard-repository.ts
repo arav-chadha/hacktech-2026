@@ -2,9 +2,11 @@
 
 import { AVAILABLE_LANGUAGES, DEFAULT_SETTINGS } from "@/lib/data/mock-data";
 import { mapOverviewStats, mapVocabularyEntries } from "@/lib/data/mappers";
+import { loadSemanticGraphSnapshot } from "@/lib/data/semantic-map";
 import type {
   DashboardRepository,
   ProgressRange,
+  SemanticGraphSnapshot,
   StudyLanguage,
   StudySettings,
   VocabularyFilters,
@@ -59,6 +61,12 @@ export function createDashboardRepository(): DashboardRepository {
       void filters;
       // BACKEND_INTEGRATION: Replace this local mapper call with a backend vocabulary search endpoint.
       return mapVocabularyEntries(filters);
+    },
+
+    async getVocabularySemanticMap(): Promise<SemanticGraphSnapshot | null> {
+      // BACKEND_INTEGRATION: Replace local semantic snapshot loading and client-side neighborhood
+      // derivation with a backend vocabulary-semantic graph fetch once embeddings are served by API.
+      return loadSemanticGraphSnapshot();
     },
 
     async getStudySettings() {

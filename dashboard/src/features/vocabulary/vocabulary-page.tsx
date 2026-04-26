@@ -4,8 +4,11 @@ import { useDeferredValue, useEffect, useState } from "react";
 import { useDashboard } from "@/components/providers/dashboard-provider";
 import { Card } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
+import { SemanticMapCard } from "@/features/vocabulary/semantic-map-card";
 import type {
   LearningLevel,
+  SemanticGraphNode,
+  SemanticGraphSnapshot,
   VocabularyEntry,
   VocabularyFilters,
   VocabularySortBy,
@@ -26,6 +29,8 @@ export function VocabularyPage() {
   const { repository, languages } = useDashboard();
   const [filters, setFilters] = useState<VocabularyFilters>(DEFAULT_FILTERS);
   const [entries, setEntries] = useState<VocabularyEntry[]>([]);
+  const [semanticMap, setSemanticMap] = useState<SemanticGraphSnapshot | null>(null);
+  const [selectedSemanticNode, setSelectedSemanticNode] = useState<SemanticGraphNode | null>(null);
   const deferredSearch = useDeferredValue(filters.searchQuery);
 
   useEffect(() => {
@@ -43,6 +48,11 @@ export function VocabularyPage() {
     }
 
     void load();
+    void repository.getVocabularySemanticMap().then((snapshot) => {
+      if (isActive) {
+        setSemanticMap(snapshot);
+      }
+    });
 
     return () => {
       isActive = false;
@@ -57,12 +67,37 @@ export function VocabularyPage() {
     repository,
   ]);
 
+  const relatedSemanticEntries =
+    selectedSemanticNode?.kind === "learned-word"
+      ? entries.filter(
+          (entry) =>
+            entry.sourceWord.toLowerCase() === selectedSemanticNode.sourceWord.toLowerCase() ||
+            entry.learnedWord.toLowerCase() === selectedSemanticNode.learnedWord.toLowerCase()
+        )
+      : selectedSemanticNode?.kind === "anchor" && semanticMap
+        ? entries.filter((entry) =>
+            semanticMap.nodes.some(
+              (node) =>
+                node.kind === "learned-word" &&
+                node.anchorId === selectedSemanticNode.id &&
+                (
+                  node.sourceWord.toLowerCase() === entry.sourceWord.toLowerCase() ||
+                  node.learnedWord.toLowerCase() === entry.learnedWord.toLowerCase()
+                )
+            )
+          )
+        : entries;
+
   function updateFilter<K extends keyof VocabularyFilters>(key: K, value: VocabularyFilters[K]) {
     setFilters((current) => ({
       ...current,
       [key]: value,
     }));
   }
+
+  const languageLabels = Object.fromEntries(
+    languages.map((language) => [language.code, language.label])
+  );
 
   return (
     <div className="panel h-full min-h-[calc(100vh-2rem)] border-ink-200 bg-white p-6 sm:p-8">
@@ -72,7 +107,27 @@ export function VocabularyPage() {
         description="Use this table as the dependable source of truth for what has already entered your study loop. Search fast, sort clearly, and keep the controls close to the data."
       />
 
+      <div className="mb-6">
+        <SemanticMapCard
+          snapshot={semanticMap}
+          selectedNodeId={selectedSemanticNode?.id ?? null}
+          languageLabels={languageLabels}
+          onSelectNode={setSelectedSemanticNode}
+        />
+      </div>
+
       <Card>
+        {selectedSemanticNode ? (
+          <div className="mb-5 rounded-xl border border-accent-100 bg-accent-50 px-4 py-3 text-sm text-accent-800">
+            Table context is currently focused by the semantic map selection:
+            {" "}
+            <strong>{selectedSemanticNode.label}</strong>
+            {selectedSemanticNode.kind === "anchor"
+              ? " and its linked learned words."
+              : " and its matching vocabulary row."}
+          </div>
+        ) : null}
+
         <div className="grid gap-4 border-b border-ink-100 pb-5 md:grid-cols-2 xl:grid-cols-5">
           <div className="xl:col-span-2">
             <label className="field-label" htmlFor="vocabulary-search">
@@ -175,7 +230,7 @@ export function VocabularyPage() {
               <option value="asc">Ascending</option>
             </select>
           </div>
-          <p className="text-sm text-ink-500">{entries.length} words in this view</p>
+          <p className="text-sm text-ink-500">{relatedSemanticEntries.length} words in this view</p>
         </div>
 
         <div className="mt-5 overflow-x-auto">
@@ -191,7 +246,7 @@ export function VocabularyPage() {
               </tr>
             </thead>
             <tbody>
-              {entries.map((entry) => (
+              {relatedSemanticEntries.map((entry) => (
                 <tr key={entry.id} className="text-sm text-ink-700">
                   <td className="border-b border-ink-100 py-4 pr-6 font-medium text-ink-900">
                     {entry.sourceWord}
@@ -212,9 +267,9 @@ export function VocabularyPage() {
             </tbody>
           </table>
 
-          {entries.length === 0 ? (
+          {relatedSemanticEntries.length === 0 ? (
             <div className="rounded-xl border border-dashed border-ink-200 bg-ink-50 px-6 py-10 text-center text-sm text-ink-500">
-              No words match the current search and filter set.
+              No words match the current search, filter set, and semantic-map selection.
             </div>
           ) : null}
         </div>
