@@ -98,8 +98,8 @@ async function streamTranslation({
   }
 }
 
-async function lookupWord({ word, targetLanguage, userEmail }) {
-  await fetch(BACKEND_EMBED_ENDPOINT, {
+function requestEmbedding({ word, targetLanguage, userEmail, sourceWord }) {
+  void fetch(BACKEND_EMBED_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -108,36 +108,27 @@ async function lookupWord({ word, targetLanguage, userEmail }) {
       word,
       targetLanguage,
       userEmail,
+      sourceWord,
     }),
-  });
-  // try {
-  //   const embedResponse = await fetch(BACKEND_EMBED_ENDPOINT, {
-  //     method: "POST",
-  //     headers: {
-  //       "Content-Type": "application/json",
-  //     },
-  //     body: JSON.stringify({
-  //       word,
-  //       targetLanguage,
-  //       userEmail,
-  //     }),
-  //   });
+  })
+    .then(async (embedResponse) => {
+      if (!embedResponse.ok) {
+        const embedErrorText = await embedResponse.text();
+        console.error(`Embedding request failed (${embedResponse.status}): ${embedErrorText}`);
+      }
+    })
+    .catch((error) => {
+      console.error("Embedding request threw an error:", error);
+    });
+}
 
-  //   if (!embedResponse.ok) {
-  //     const embedErrorText = await embedResponse.text();
-  //     console.error(`Embedding request failed (${embedResponse.status}): ${embedErrorText}`);
-  //   } else {
-  //     const embedResponseData = await embedResponse.json();
-  //     console.log("Embedding request succeeded:", {
-  //       word,
-  //       targetLanguage,
-  //       cached: Boolean(embedResponseData?.cached),
-  //       ok: Boolean(embedResponseData?.ok),
-  //     });
-  //   }
-  // } catch (error) {
-  //   console.error("Embedding request threw an error:", error);
-  // }
+async function lookupWord({ word, targetLanguage, userEmail, sourceWord }) {
+  requestEmbedding({
+    word,
+    targetLanguage,
+    userEmail,
+    sourceWord,
+  });
 
   const response = await fetch(BACKEND_LOOKUP_WORD_ENDPOINT, {
     method: "POST",

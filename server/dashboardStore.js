@@ -1,4 +1,5 @@
-import { ensureMongoIndexes, getCollectionNames, getMongoDatabase, hasMongoConfig } from "./mongo.js";
+import fs from "node:fs";
+import { ensureMongoIndexes, ensureWordEmbeddingIndexes, getCollectionNames, getMongoDatabase, hasMongoConfig } from "./mongo.js";
 
 const DASHBOARD_LANGUAGES = [
   { code: "es", label: "Spanish", locale: "es-ES", storageValue: "spanish" },
@@ -17,6 +18,11 @@ const DASHBOARD_DEFAULT_SETTINGS = {
   studyLanguageCode: "es",
   learningLevel: "Intermediate",
 };
+const DASHBOARD_SEMANTIC_PROJECTION_SEED = 42;
+const DASHBOARD_SEMANTIC_ANCHOR_SNAPSHOT_URL = new URL(
+  "../dashboard/src/lib/data/semantic/anchor-meanings.snapshot.json",
+  import.meta.url
+);
 
 const STATUS_ORDER = {
   New: 1,
@@ -46,6 +52,174 @@ function normalizeSearchQuery(value) {
 function normalizeDate(input) {
   const date = input instanceof Date ? input : new Date(input);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function normalizeEmbedding(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return null;
+  }
+
+  const normalized = value.filter(
+    (entry) => typeof entry === "number" && Number.isFinite(entry)
+  );
+
+  return normalized.length === value.length ? normalized : null;
+}
+
+function normalizeProjectionCoordinate(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+let semanticAnchorSnapshotCache = null;
+
+function getSemanticAnchorNodes() {
+  if (semanticAnchorSnapshotCache) {
+    return semanticAnchorSnapshotCache;
+  }
+
+  try {
+    const rawSnapshot = fs.readFileSync(DASHBOARD_SEMANTIC_ANCHOR_SNAPSHOT_URL, "utf8");
+    const parsedSnapshot = JSON.parse(rawSnapshot);
+    const rawNodes = Array.isArray(parsedSnapshot?.nodes) ? parsedSnapshot.nodes : [];
+
+    semanticAnchorSnapshotCache = rawNodes
+      .filter((node) => node && typeof node === "object" && node.kind === "anchor")
+      .map((node) => {
+        const embedding = normalizeEmbedding(node.embedding);
+        if (
+          typeof node.id !== "string" ||
+          typeof node.label !== "string" ||
+          typeof node.definition !== "string" ||
+          !embedding
+        ) {
+          return null;
+        }
+
+        return {
+          id: node.id,
+          kind: "anchor",
+          label: node.label,
+          definition: node.definition,
+          x: normalizeProjectionCoordinate(node.x),
+          y: normalizeProjectionCoordinate(node.y),
+          z: normalizeProjectionCoordinate(node.z),
+          embedding,
+          tags: Array.isArray(node.tags)
+            ? node.tags.filter((tag) => typeof tag === "string")
+            : undefined,
+          notes: typeof node.notes === "string" ? node.notes : undefined,
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    semanticAnchorSnapshotCache = [];
+  }
+
+  return semanticAnchorSnapshotCache;
+}
+
+function cosineSimilarity(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length || left.length === 0) {
+    return -1;
+  }
+
+  let dotProduct = 0;
+  let leftMagnitude = 0;
+  let rightMagnitude = 0;
+
+  for (let index = 0; index < left.length; index += 1) {
+    const leftValue = left[index] ?? 0;
+    const rightValue = right[index] ?? 0;
+    dotProduct += leftValue * rightValue;
+    leftMagnitude += leftValue * leftValue;
+    rightMagnitude += rightValue * rightValue;
+  }
+
+  if (leftMagnitude === 0 || rightMagnitude === 0) {
+    return -1;
+  }
+
+  return dotProduct / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
+}
+
+function projectEmbeddingToUnitSpace(embedding) {
+  let x = 0;
+  let y = 0;
+  let z = 0;
+
+  for (let index = 0; index < embedding.length; index += 1) {
+    const value = embedding[index] ?? 0;
+    x += value * Math.sin((index + 1) * 0.173 + DASHBOARD_SEMANTIC_PROJECTION_SEED);
+    y += value * Math.cos((index + 1) * 0.131 + DASHBOARD_SEMANTIC_PROJECTION_SEED * 0.5);
+    z += value * Math.sin((index + 1) * 0.097 + DASHBOARD_SEMANTIC_PROJECTION_SEED * 1.5);
+  }
+
+  const magnitude = Math.sqrt(x * x + y * y + z * z) || 1;
+  return {
+    x: x / magnitude,
+    y: y / magnitude,
+    z: z / magnitude,
+  };
+}
+
+function findNearestAnchor(embedding, anchors) {
+  if (!Array.isArray(anchors) || anchors.length === 0) {
+    return null;
+  }
+
+  let nearestAnchor = anchors[0] ?? null;
+  let bestScore = nearestAnchor ? cosineSimilarity(embedding, nearestAnchor.embedding) : -1;
+
+  for (let index = 1; index < anchors.length; index += 1) {
+    const candidate = anchors[index];
+    const score = cosineSimilarity(embedding, candidate.embedding);
+    if (score > bestScore) {
+      nearestAnchor = candidate;
+      bestScore = score;
+    }
+  }
+
+  return nearestAnchor;
+}
+
+function buildSemanticNeighborLinks(nodes) {
+  const links = [];
+  const linkKeys = new Set();
+  const neighborCount = Math.min(4, Math.max(1, nodes.length - 1));
+
+  function pushLink(source, target) {
+    if (!source || !target || source === target) {
+      return;
+    }
+
+    const [first, second] = [source, target].sort();
+    const key = `${first}__${second}`;
+    if (linkKeys.has(key)) {
+      return;
+    }
+
+    linkKeys.add(key);
+    links.push({ source, target });
+  }
+
+  nodes.forEach((node) => {
+    pushLink(node.anchorId, node.id);
+
+    const nearestNeighbors = nodes
+      .filter((candidate) => candidate.id !== node.id)
+      .map((candidate) => ({
+        id: candidate.id,
+        score: cosineSimilarity(node.embedding ?? [], candidate.embedding ?? []),
+      }))
+      .sort((left, right) => right.score - left.score)
+      .slice(0, neighborCount);
+
+    nearestNeighbors.forEach((neighbor) => {
+      pushLink(node.id, neighbor.id);
+    });
+  });
+
+  return links;
 }
 
 function toIsoDate(date) {
@@ -498,4 +672,110 @@ export async function getDashboardVocabularyEntries({
     );
 
   return entries;
+}
+
+export async function getDashboardSemanticMap({ userEmail, settings }) {
+  const normalizedEmail = normalizeEmail(userEmail);
+  const sanitizedSettings = sanitizeSettings(settings);
+  const selectedLanguage = DASHBOARD_LANGUAGE_BY_CODE.get(sanitizedSettings.studyLanguageCode);
+
+  if (!normalizedEmail || !selectedLanguage || !hasMongoConfig()) {
+    return null;
+  }
+
+  await ensureWordEmbeddingIndexes();
+  const db = await getMongoDatabase();
+  if (!db) {
+    return null;
+  }
+
+  const { wordEmbeddings } = getCollectionNames();
+  const embeddingDocuments = await db.collection(wordEmbeddings)
+    .find(
+      {
+        userEmailLower: normalizedEmail,
+        targetLanguage: selectedLanguage.storageValue,
+      },
+      {
+        projection: {
+          _id: 0,
+          word: 1,
+          sourceWord: 1,
+          embedding: 1,
+          updatedAt: 1,
+          createdAt: 1,
+        },
+      }
+    )
+    .toArray();
+
+  const anchors = getSemanticAnchorNodes();
+  const learnedNodes = embeddingDocuments
+    .map((document, index) => {
+      const learnedWord = normalizeString(document?.word);
+      const sourceWord = normalizeString(document?.sourceWord) || learnedWord;
+      const embedding = normalizeEmbedding(document?.embedding);
+
+      if (!learnedWord || !embedding) {
+        return null;
+      }
+
+      const nearestAnchor = findNearestAnchor(embedding, anchors);
+      const projectedPoint = projectEmbeddingToUnitSpace(embedding);
+      const anchorX = nearestAnchor?.x ?? 0;
+      const anchorY = nearestAnchor?.y ?? 0;
+      const anchorZ = nearestAnchor?.z ?? 0;
+
+      return {
+        id: `${selectedLanguage.code}-${index + 1}-${learnedWord.toLowerCase().replace(/[^a-z0-9]+/gi, "-")}`,
+        kind: "learned-word",
+        label: learnedWord,
+        sourceWord,
+        learnedWord,
+        languageCode: selectedLanguage.code,
+        anchorId: nearestAnchor?.id ?? `language-${selectedLanguage.code}`,
+        x: anchorX + projectedPoint.x * 2.8,
+        y: anchorY + projectedPoint.y * 2.8,
+        z: anchorZ + projectedPoint.z * 2.8,
+        embedding,
+        definition: nearestAnchor?.definition ?? `Embedded ${selectedLanguage.label} vocabulary.`,
+        level: sanitizedSettings.learningLevel,
+        status: "Practicing",
+        generatedAt:
+          normalizeDate(document?.updatedAt)?.toISOString() ??
+          normalizeDate(document?.createdAt)?.toISOString() ??
+          null,
+      };
+    })
+    .filter(Boolean);
+
+  if (learnedNodes.length === 0) {
+    return null;
+  }
+
+  const usedAnchorIds = new Set(learnedNodes.map((node) => node.anchorId));
+  const activeAnchors = anchors.filter((anchor) => usedAnchorIds.has(anchor.id));
+  const links = buildSemanticNeighborLinks(learnedNodes);
+  const generatedAt = learnedNodes
+    .map((node) => node.generatedAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1) ?? new Date().toISOString();
+
+  return {
+    schemaVersion: 1,
+    embeddingModel: "text-embedding-3-small",
+    embeddingDimensions: learnedNodes[0]?.embedding?.length ?? null,
+    generatedAt,
+    projection: {
+      algorithm: "anchor-relative-random-projection",
+      dimensions: 3,
+      randomSeed: DASHBOARD_SEMANTIC_PROJECTION_SEED,
+    },
+    nodes: [
+      ...activeAnchors,
+      ...learnedNodes.map(({ generatedAt: _generatedAt, ...node }) => node),
+    ],
+    links,
+  };
 }
